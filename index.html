@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#0f172a">
+  <title>Electrical Isolation Assistant</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand"><div class="logo">⚡</div><div><h1>Electrical Isolation Assistant</h1><p>ระบบช่วยวิเคราะห์และวางแผนตัดแยกวงจรไฟฟ้า</p></div></div>
+  <div class="top-actions">
+    <span class="tag">GitHub Pages Edition</span>
+    <button class="secondary" id="exportBtn">ส่งออกข้อมูล</button>
+    <label class="secondary file-label">นำเข้าข้อมูล<input id="importFile" type="file" accept="application/json"></label>
+    <button class="danger" id="resetBtn">คืนค่าตัวอย่าง</button>
+  </div>
+</header>
+
+<div class="notice"><strong>ข้อจำกัดด้านความปลอดภัย:</strong> เครื่องมือนี้ใช้เพื่อการศึกษา/วิเคราะห์และจัดทำแผนเท่านั้น ไม่ใช่ระบบ SCADA และไม่ส่งคำสั่งควบคุมอุปกรณ์ ต้องตรวจสอบ Single Line Diagram, สภาพการจ่ายไฟย้อนกลับ, ระบบป้องกัน, ใบอนุญาต และขั้นตอนความปลอดภัยโดยผู้มีอำนาจก่อนปฏิบัติงานจริง</div>
+
+<main class="layout">
+  <aside class="sidebar">
+    <nav class="tabs">
+      <button class="tab active" data-tab="analysis">วิเคราะห์เหตุขัดข้อง</button>
+      <button class="tab" data-tab="devices">อุปกรณ์</button>
+      <button class="tab" data-tab="settings">ตั้งค่า/ข้อมูล</button>
+    </nav>
+
+    <section class="panel tab-panel" id="tab-analysis">
+      <h2>1. จุดเกิดเหตุ</h2>
+      <label>เลือกอุปกรณ์หรือจุดขัดข้อง
+        <select id="faultSelect"></select>
+      </label>
+      <label>ลักษณะเหตุ
+        <select id="faultKind">
+          <option value="line">สาย/ช่วงวงจรระหว่างอุปกรณ์</option>
+          <option value="device">ตัวอุปกรณ์ชำรุด</option>
+        </select>
+      </label>
+      <button class="primary full" id="analyzeBtn">วิเคราะห์และสร้างแผน</button>
+      <div id="analysisSummary" class="empty">เลือกจุดเกิดเหตุแล้วกดวิเคราะห์</div>
+      <h2>2. แผนงาน المقترح</h2>
+      <div id="plan" class="empty">ยังไม่มีแผนวิเคราะห์</div>
+      <button id="printBtn" class="secondary full" disabled>พิมพ์ / บันทึก PDF</button>
+    </section>
+
+    <section class="panel tab-panel hidden" id="tab-devices">
+      <div class="row between"><h2>ทะเบียนอุปกรณ์</h2><button class="primary" id="addDeviceBtn">+ เพิ่ม</button></div>
+      <input id="searchDevice" placeholder="ค้นหารหัสหรือประเภท...">
+      <div class="table-wrap"><table><thead><tr><th>รหัส / ประเภท</th><th>สถานะ</th><th></th></tr></thead><tbody id="deviceRows"></tbody></table></div>
+      <p class="muted small">กำหนด Upstream Parent เพื่อสร้างโครงข่ายแบบต้นไม้/รัศมี (radial) ตัวอย่างนี้ยังไม่รองรับ tie-switch และวงจร mesh อัตโนมัติ</p>
+    </section>
+
+    <section class="panel tab-panel hidden" id="tab-settings">
+      <h2>ข้อมูลระบบ</h2>
+      <div class="statgrid"><div><b id="deviceCount">0</b><span>อุปกรณ์</span></div><div><b id="rootCount">0</b><span>แหล่งจ่ายหลัก</span></div><div><b id="invalidCount">0</b><span>ข้อผิดพลาดโครงข่าย</span></div></div>
+      <h3>พิกัด GPS</h3>
+      <button class="secondary full" id="gpsBtn">ใช้ตำแหน่งปัจจุบัน</button>
+      <div class="coords"><span>Lat: <b id="latVal">-</b></span><span>Lng: <b id="lngVal">-</b></span></div>
+      <label>หรือวางพิกัด Lat, Lng<input id="coordsInput" placeholder="13.7563,100.5018"></label>
+      <button class="secondary full" id="coordsBtn">ใช้พิกัดที่กรอก</button>
+      <button class="secondary full" id="nearestBtn">ค้นหาอุปกรณ์ใกล้ที่สุด</button>
+      <div id="nearestResult" class="empty">ยังไม่มีพิกัด</div>
+      <h3>การจัดเก็บ</h3>
+      <p class="muted small">ข้อมูลเก็บใน Local Storage ของเบราว์เซอร์เครื่องนี้ ไม่ซิงก์ข้ามผู้ใช้หรืออุปกรณ์ ควรส่งออก JSON เพื่อสำรองข้อมูล</p>
+      <p id="saveStatus" class="small success">พร้อมใช้งาน</p>
+    </section>
+  </aside>
+
+  <section class="workspace">
+    <div class="workspace-head"><div><h2>Single Line Diagram (SLD)</h2><p class="muted small">แสดงโครงข่ายจากความสัมพันธ์ Upstream Parent</p></div><div class="legend"><span><i class="dot green"></i> สับ/ปกติ</span><span><i class="dot red"></i> ปลด</span><span><i class="dot amber"></i> จุดเกิดเหตุ</span></div></div>
+    <div id="sld" class="sld"><svg id="sldSvg" viewBox="0 0 1000 620" role="img" aria-label="Single line diagram"></svg></div>
+    <div class="workspace-foot"><span id="networkStatus">ตรวจสอบโครงข่าย...</span><span>คลิกอุปกรณ์เพื่อดูรายละเอียดเท่านั้น</span></div>
+  </section>
+</main>
+
+<dialog id="deviceDialog">
+  <form method="dialog" id="deviceForm">
+    <div class="row between"><h2 id="dialogTitle">เพิ่มอุปกรณ์</h2><button class="iconbtn" value="cancel" aria-label="ปิด">✕</button></div>
+    <input type="hidden" id="originalId">
+    <label>รหัสอุปกรณ์<input id="devId" required maxlength="40" placeholder="เช่น REC-02"></label>
+    <label>ประเภท<select id="devType"><option>Substation</option><option>Circuit Breaker</option><option>Recloser</option><option>Load Break Switch</option><option>Fused Cutout</option><option>Transformer</option><option>Sectionalizer</option><option>Other</option></select></label>
+    <div class="two"><label>Latitude<input id="devLat" type="number" step="any" required></label><label>Longitude<input id="devLng" type="number" step="any" required></label></div>
+    <label>อุปกรณ์ต้นน้ำ (Upstream Parent)<select id="devParent"></select></label>
+    <label>สถานะปัจจุบัน<select id="devStatus"><option value="closed">สับ (Closed)</option><option value="open">ปลด (Open)</option></select></label>
+    <p class="muted small">อุปกรณ์ที่ไม่มีต้นน้ำถือเป็นแหล่งจ่ายหลัก ระบบจะปฏิเสธรหัสซ้ำและความสัมพันธ์ที่วนกลับหาตัวเอง</p>
+    <div class="row end"><button class="secondary" value="cancel">ยกเลิก</button><button class="primary" id="saveDeviceBtn" value="default">บันทึก</button></div>
+  </form>
+</dialog>
+<dialog id="detailDialog"><div class="row between"><h2>รายละเอียดอุปกรณ์</h2><button class="iconbtn" id="closeDetail">✕</button></div><div id="detailContent"></div></dialog>
+<footer>Electrical Isolation Assistant · Static app for GitHub Pages · ไม่ใช่ระบบควบคุมอุปกรณ์ไฟฟ้า</footer>
+<script src="js/app.js"></script>
+</body>
+</html>
