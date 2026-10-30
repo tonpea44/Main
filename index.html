@@ -417,4 +417,276 @@
         function getCurrentGPS() {
             if (navigator.geolocation) {
                 navigator.geolocation.getCurrentPosition(position => {
-                    currentGPS.lat = position.coords
+                    currentGPS.lat = position.coords.latitude;
+                    currentGPS.lng = position.coords.longitude;
+                    document.getElementById('lbl-lat').innerText = currentGPS.lat.toFixed(4);
+                    document.getElementById('lbl-lng').innerText = currentGPS.lng.toFixed(4);
+                }, () => {
+                    document.getElementById('lbl-lat').innerText = currentGPS.lat.toFixed(4);
+                    document.getElementById('lbl-lng').innerText = currentGPS.lng.toFixed(4);
+                });
+            } else {
+                document.getElementById('lbl-lat').innerText = currentGPS.lat.toFixed(4);
+                document.getElementById('lbl-lng').innerText = currentGPS.lng.toFixed(4);
+            }
+        }
+
+        function parseMapInput() {
+            const val = document.getElementById('map-url-input').value.trim();
+            const coordRegex = /(-?\d+\.\d+),\s*(-?\d+\.\d+)/;
+            const match = val.match(coordRegex);
+            if(match) {
+                currentGPS.lat = parseFloat(match[1]);
+                currentGPS.lng = parseFloat(match[2]);
+                document.getElementById('lbl-lat').innerText = currentGPS.lat.toFixed(4);
+                document.getElementById('lbl-lng').innerText = currentGPS.lng.toFixed(4);
+                alert("แปลงพิกัดสำเร็จ!");
+            } else {
+                alert("รูปแบบพิกัดไม่ถูกต้อง (เช่น 13.75,100.50)");
+            }
+        }
+
+        function getDistanceFromLatLonInKm(lat1, lon1, lat2, lon2) {
+            const R = 6371;
+            const dLat = (lat2-lat1) * (Math.PI/180);
+            const dLon = (lon2-lon1) * (Math.PI/180);
+            const a = Math.sin(dLat/2) * Math.sin(dLat/2) + Math.cos(lat1*(Math.PI/180)) * Math.cos(lat2*(Math.PI/180)) * Math.sin(dLon/2) * Math.sin(dLon/2);
+            return R * (2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a)));
+        }
+
+        function findNearestDevice() {
+            let nearest = null;
+            let minDist = Infinity;
+            devices.forEach(dev => {
+                const dist = getDistanceFromLatLonInKm(currentGPS.lat, currentGPS.lng, dev.lat, dev.lng);
+                if(dist < minDist) { minDist = dist; nearest = dev; }
+            });
+            if(nearest) {
+                const resDiv = document.getElementById('nearest-result');
+                resDiv.classList.remove('hidden');
+                resDiv.innerHTML = `
+                    <p class="font-bold text-blue-400 mb-1">อุปกรณ์ใกล้สุด: ${nearest.id} (${(minDist * 1000).toFixed(0)} ม.)</p>
+                    <a href="https://www.google.com/maps/search/?api=1&query=${nearest.lat},${nearest.lng}" target="_blank" class="text-blue-400 hover:underline"><i class="fa-solid fa-map-location-dot mr-1"></i> เปิด Google Maps</a>
+                `;
+                dispatchLineNotification(`📍 เช็คอินพิกัด: อยู่ใกล้เขตอุปกรณ์ ${nearest.id}`);
+            }
+        }
+
+        function updateFaultDropdown() {
+            const sel = document.getElementById('fault-location-select');
+            if(!sel) return;
+            sel.innerHTML = '<option value="">-- เลือกจุดเกิดเหตุสายขาด --</option>';
+            devices.forEach(dev => {
+                sel.innerHTML += `<option value="${dev.id}">จุดเกิดเหตุใกล้ ${dev.id} (${dev.type})</option>`;
+            });
+        }
+
+        function runIsolationAnalysis() {
+            const faultId = document.getElementById('fault-location-select').value;
+            if(!faultId) { alert("กรุณาเลือกจุดเกิดเหตุ"); return; }
+            activeFaultId = faultId;
+            renderSLD();
+            const faultDev = devices.find(d => d.id === faultId);
+            let upstreamDev = devices.find(d => d.id === (faultDev ? faultDev.upstream : ''));
+
+            currentSteps = [
+                { step: 1, action: `ตรวจสอบจุดเกิดเหตุบริเวณอุปกรณ์ ${faultId}`, status: 'pending' },
+                { step: 2, action: `ปลดอุปกรณ์ป้องกันต้นน้ำ (${upstreamDev ? upstreamDev.id : 'SUB-01'})`, status: 'pending' },
+                { step: 3, action: `ส่งทีมเข้าพื้นที่ซ่อมแซม`, status: 'pending' }
+            ];
+            renderSteps();
+            document.getElementById('active-fault-badge').innerText = `เคส: ${faultId}`;
+            document.getElementById('active-fault-badge').className = "text-amber-400 font-semibold";
+            dispatchLineNotification(`🚨 แจ้งเหตุสายขาดบริเวณ ${faultId}`);
+        }
+
+        function renderSteps() {
+            const container = document.getElementById('switching-steps-container');
+            document.getElementById('step-count-badge').innerText = `${currentSteps.length} รายการ`;
+            let html = '';
+            currentSteps.forEach((s, idx) => {
+                html += `
+                    <div class="bg-slate-800 border border-slate-700 p-2.5 rounded-lg flex items-start justify-between space-x-2 text-xs">
+                        <div><span class="font-bold text-blue-400 mr-1">#${s.step}</span><span class="${s.status==='done'?'line-through text-emerald-300':'text-slate-200'}">${s.action}</span></div>
+                        <button onclick="executeStep(${idx})" class="px-2 py-1 bg-slate-700 hover:bg-slate-600 text-white rounded text-[10px]">${s.status==='done'?'สำเร็จ':'ดำเนินการ'}</button>
+                    </div>
+                `;
+            });
+            container.innerHTML = html;
+        }
+
+        function executeStep(idx) {
+            currentSteps[idx].status = 'done';
+            renderSteps();
+            dispatchLineNotification(`✅ ดำเนินการขั้นตอน #${currentSteps[idx].step} สำเร็จ`);
+        }
+
+        function renderDeviceTable() {
+            const tbody = document.getElementById('device-table-body');
+            const searchVal = document.getElementById('device-search-input').value.toLowerCase();
+            let html = '';
+            devices.filter(d => d.id.toLowerCase().includes(searchVal) || d.type.toLowerCase().includes(searchVal)).forEach(dev => {
+                const statusBadge = dev.status === 'closed' ? '<span class="text-emerald-400">สับ</span>' : '<span class="text-red-400">ปลด</span>';
+                html += `
+                    <tr class="hover:bg-slate-900/50">
+                        <td class="p-2 font-mono"><div class="font-bold text-slate-200">${dev.id}</div><div class="text-[10px] text-slate-400">${dev.type}</div></td>
+                        <td class="p-2">${statusBadge}</td>
+                        <td class="p-2 text-right space-x-1">
+                            <button onclick="editDevice('${dev.id}')" class="text-blue-400 p-1"><i class="fa-solid fa-pen"></i></button>
+                            <button onclick="deleteDevice('${dev.id}')" class="text-red-400 p-1"><i class="fa-solid fa-trash"></i></button>
+                        </td>
+                    </tr>
+                `;
+            });
+            tbody.innerHTML = html;
+            updateUpstreamDropdown();
+        }
+
+        function filterDeviceTable() { renderDeviceTable(); }
+
+        function updateUpstreamDropdown() {
+            const sel = document.getElementById('modal-dev-upstream');
+            if(!sel) return;
+            let opts = '<option value="">-- ไม่มี (แหล่งจ่ายหลัก) --</option>';
+            devices.forEach(d => { opts += `<option value="${d.id}">${d.id} (${d.type})</option>`; });
+            sel.innerHTML = opts;
+        }
+
+        function openAddDeviceModal() {
+            document.getElementById('modal-title').innerHTML = `<i class="fa-solid fa-network-wired text-blue-400 mr-2"></i> เพิ่มอุปกรณ์ไฟฟ้าใหม่`;
+            document.getElementById('edit-original-id').value = '';
+            document.getElementById('modal-dev-id').value = '';
+            document.getElementById('modal-dev-lat').value = '13.75';
+            document.getElementById('modal-dev-lng').value = '100.50';
+            document.getElementById('device-modal').classList.remove('hidden');
+        }
+
+        function closeDeviceModal() {
+            document.getElementById('device-modal').classList.add('hidden');
+        }
+
+        function editDevice(id) {
+            const dev = devices.find(d => d.id === id);
+            if(dev) {
+                document.getElementById('modal-title').innerHTML = `<i class="fa-solid fa-pen text-blue-400 mr-2"></i> แก้ไขอุปกรณ์ ${dev.id}`;
+                document.getElementById('edit-original-id').value = dev.id;
+                document.getElementById('modal-dev-id').value = dev.id;
+                document.getElementById('modal-dev-type').value = dev.type;
+                document.getElementById('modal-dev-lat').value = dev.lat;
+                document.getElementById('modal-dev-lng').value = dev.lng;
+                document.getElementById('modal-dev-upstream').value = dev.upstream || '';
+                document.getElementById('modal-dev-status').value = dev.status;
+                document.getElementById('device-modal').classList.remove('hidden');
+            }
+        }
+
+        function saveDevice(e) {
+            e.preventDefault();
+            try {
+                const originalId = document.getElementById('edit-original-id').value.trim();
+                const newId = document.getElementById('modal-dev-id').value.trim();
+                const type = document.getElementById('modal-dev-type').value;
+                const lat = parseFloat(document.getElementById('modal-dev-lat').value) || 13.75;
+                const lng = parseFloat(document.getElementById('modal-dev-lng').value) || 100.50;
+                const upstream = document.getElementById('modal-dev-upstream').value;
+                const status = document.getElementById('modal-dev-status').value;
+
+                if(!newId) { alert("กรุณากรอกรหัสอุปกรณ์"); return; }
+
+                if(originalId) {
+                    const dev = devices.find(d => d.id === originalId);
+                    if(dev) {
+                        dev.id = newId;
+                        dev.type = type;
+                        dev.lat = lat;
+                        dev.lng = lng;
+                        dev.upstream = upstream;
+                        dev.status = status;
+                    }
+                } else {
+                    if(devices.some(d => d.id === newId)) {
+                        alert("รหัสอุปกรณ์นี้มีอยู่แล้วในระบบ");
+                        return;
+                    }
+                    const newX = 150 + (devices.length * 120) % 700;
+                    const newY = 150 + (devices.length * 90) % 400;
+                    devices.push({ id: newId, type, lat, lng, upstream, status, x: newX, y: newY });
+                }
+
+                closeDeviceModal();
+                renderSLD();
+                renderDeviceTable();
+                updateFaultDropdown();
+                alert("บันทึกข้อมูลอุปกรณ์สำเร็จ!");
+            } catch (err) {
+                console.error(err);
+                alert("เกิดข้อผิดพลาดในการบันทึก: " + err.message);
+            }
+        }
+
+        function deleteDevice(id) {
+            if(confirm(`ต้องการลบอุปกรณ์ ${id} หรือไม่?`)) {
+                devices = devices.filter(d => d.id !== id);
+                renderSLD();
+                renderDeviceTable();
+                updateFaultDropdown();
+            }
+        }
+
+        function resetSystemData() {
+            if(confirm("ต้องการรีเซ็ตข้อมูลทั้งหมดกลับเป็นค่าเริ่มต้น?")) {
+                localStorage.clear();
+                location.reload();
+            }
+        }
+
+        function openLineSettings() { document.getElementById('line-settings-modal').classList.remove('hidden'); }
+        function closeLineSettings() { document.getElementById('line-settings-modal').classList.add('hidden'); }
+        function saveLineSettings() {
+            lineToken = document.getElementById('line-token-input').value.trim();
+            localStorage.setItem('elec_line_token', lineToken);
+            closeLineSettings();
+            alert("บันทึก Token สำเร็จ!");
+        }
+
+        function dispatchLineNotification(message) {
+            const timeStr = new Date().toLocaleTimeString('th-TH');
+            lineHistory.unshift({ time: timeStr, text: message });
+            localStorage.setItem('elec_line_history', JSON.stringify(lineHistory));
+            renderLineHistory();
+
+            const consoleBody = document.getElementById('line-console-body');
+            if(consoleBody) {
+                const div = document.createElement('div');
+                div.className = "bg-slate-800 border border-slate-700 p-2 rounded-lg text-emerald-300 text-[11px]";
+                div.innerHTML = `<span class="text-[9px] text-slate-400 block">[${timeStr}] ส่งเข้า LINE</span>${message}`;
+                consoleBody.prepend(div);
+            }
+        }
+
+        function renderLineHistory() {
+            const container = document.getElementById('line-history-container');
+            if(!container) return;
+            if(lineHistory.length === 0) {
+                container.innerHTML = `<div class="text-center py-6 text-slate-500 text-xs">ยังไม่มีประวัติการส่งรายงาน</div>`;
+                return;
+            }
+            let html = '';
+            lineHistory.forEach(h => {
+                html += `<div class="bg-slate-900 border border-slate-700 p-2.5 rounded-lg text-xs space-y-1"><span class="text-[10px] text-slate-400 block">${h.time}</span><p>${h.text}</p></div>`;
+            });
+            container.innerHTML = html;
+        }
+
+        function clearLineHistory() {
+            lineHistory = [];
+            localStorage.removeItem('elec_line_history');
+            renderLineHistory();
+        }
+
+        function toggleLineConsole() {
+            document.getElementById('line-console-body').classList.toggle('hidden');
+        }
+    </script>
+</body>
+</html>
