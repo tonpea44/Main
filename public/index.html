@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ระบบวิเคราะห์และคำนวณการตัดจ่ายไฟฟ้า Full-Stack</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Sarabun:wght@300;400;500;600;700&display=swap');
+        body { font-family: 'Sarabun', sans-serif; }
+    </style>
+</head>
+<body class="bg-slate-900 text-slate-100 min-h-screen flex flex-col">
+
+    <header class="bg-slate-800 border-b border-slate-700 px-4 py-3 flex justify-between items-center shadow-md">
+        <div class="flex items-center space-x-3">
+            <div class="bg-blue-600 p-2 rounded-lg text-white">
+                <i class="fa-solid fa-bolt text-xl"></i>
+            </div>
+            <div>
+                <h1 class="text-lg font-bold">Electrical Isolation System (Full-Stack)</h1>
+                <p class="text-xs text-slate-400">ระบบตัดจ่ายไฟฟ้าพร้อมเซิร์ฟเวอร์ Backend และแจ้งเตือน LINE</p>
+            </div>
+        </div>
+        <button onclick="openLineModal()" class="bg-emerald-600 hover:bg-emerald-500 text-white text-xs px-3 py-1.5 rounded-lg flex items-center space-x-1.5">
+            <i class="fa-brands fa-line"></i><span>ตั้งค่า LINE Token</span>
+        </button>
+    </header>
+
+    <div class="flex-1 flex flex-col lg:flex-row overflow-hidden">
+        
+        <!-- Sidebar Controls -->
+        <div class="w-full lg:w-[400px] bg-slate-800/90 border-r border-slate-700 p-4 space-y-4 overflow-y-auto">
+            
+            <!-- GPS Panel -->
+            <div class="bg-slate-900/60 p-3.5 rounded-xl border border-slate-700 space-y-2.5">
+                <h2 class="text-sm font-semibold text-blue-400"><i class="fa-solid fa-location-crosshairs mr-2"></i>ระบบพิกัด GPS</h2>
+                <button onclick="checkInGPS()" class="w-full bg-blue-600 hover:bg-blue-500 text-white text-xs py-2 rounded-lg font-medium">
+                    <i class="fa-solid fa-crosshairs mr-1"></i>เช็คอินพิกัดปัจจุบัน
+                </button>
+                <div id="gps-result" class="text-xs text-slate-300 bg-slate-800 p-2.5 rounded-lg border border-slate-700 hidden"></div>
+            </div>
+
+            <!-- Isolation Analysis -->
+            <div class="bg-slate-900/60 p-3.5 rounded-xl border border-slate-700 space-y-2.5">
+                <h2 class="text-sm font-semibold text-amber-400"><i class="fa-solid fa-triangle-exclamation mr-2"></i>วิเคราะห์สายขาด</h2>
+                <select id="fault-select" class="w-full bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-2 text-xs text-slate-200">
+                    <option value="">-- เลือกจุดเกิดเหตุ --</option>
+                </select>
+                <button onclick="runIsolation()" class="w-full bg-amber-600 hover:bg-amber-500 text-white text-xs font-semibold py-2 rounded-lg">
+                    <i class="fa-solid fa-calculator mr-1"></i>คำนวณขั้นตอน Isolation
+                </button>
+            </div>
+
+            <!-- Steps Worksheet -->
+            <div class="bg-slate-900/60 p-3.5 rounded-xl border border-slate-700 space-y-2">
+                <h2 class="text-sm font-semibold text-blue-400"><i class="fa-solid fa-list-check mr-2"></i>ขั้นตอนการสับ-ปลด</h2>
+                <div id="steps-list" class="space-y-2 max-h-52 overflow-y-auto">
+                    <div class="text-center py-4 text-slate-500 text-xs">เลือกจุดสายขาด แล้วกดวิเคราะห์</div>
+                </div>
+            </div>
+
+            <!-- Device Management -->
+            <div class="bg-slate-900/60 p-3.5 rounded-xl border border-slate-700 space-y-2">
+                <div class="flex justify-between items-center">
+                    <h2 class="text-sm font-semibold text-slate-200">รายการอุปกรณ์ในระบบ</h2>
+                    <button onclick="openAddModal()" class="bg-blue-600 text-white text-xs px-2 py-1 rounded">+ เพิ่ม</button>
+                </div>
+                <div class="overflow-x-auto">
+                    <table class="w-full text-left text-xs">
+                        <thead class="bg-slate-900 text-slate-400">
+                            <tr><th class="p-2">รหัส</th><th class="p-2">ประเภท</th><th class="p-2 text-right">จัดการ</th></tr>
+                        </thead>
+                        <tbody id="device-table-body" class="divide-y divide-slate-700"></tbody>
+                    </table>
+                </div>
+            </div>
+
+        </div>
+
+        <!-- SVG Diagram View -->
+        <div class="flex-1 bg-slate-950 p-4 flex items-center justify-center relative">
+            <svg id="sld-svg" class="w-full h-full min-h-[500px]" viewBox="0 0 900 500"></svg>
+        </div>
+
+    </div>
+
+    <!-- Modal Form -->
+    <div id="device-modal" class="fixed inset-0 bg-black/70 z-50 flex items-center justify-center hidden">
+        <div class="bg-slate-800 p-5 rounded-xl border border-slate-700 w-80 space-y-3">
+            <h3 class="text-sm font-bold">เพิ่ม/แก้ไข อุปกรณ์</h3>
+            <input type="text" id="dev-id" placeholder="รหัสอุปกรณ์ (เช่น CB-02)" class="w-full bg-slate-900 p-2 text-xs rounded border border-slate-700">
+            <select id="dev-type" class="w-full bg-slate-900 p-2 text-xs rounded border border-slate-700">
+                <option value="Circuit Breaker">Circuit Breaker</option>
+                <option value="Recloser">Recloser</option>
+                <option value="Load Break Switch">Load Break Switch</option>
+                <option value="Fused Cutout">Fused Cutout</option>
+            </select>
+            <input type="number" step="any" id="dev-lat" placeholder="Latitude" class="w-full bg-slate-900 p-2 text-xs rounded border border-slate-700">
+            <input type="number" step="any" id="dev-lng" placeholder="Longitude" class="w-full bg-slate-900 p-2 text-xs rounded border border-slate-700">
+            <select id="dev-upstream" class="w-full bg-slate-900 p-2 text-xs rounded border border-slate-700"></select>
+            <div class="flex justify-end space-x-2 pt-2">
+                <button onclick="closeModal()" class="px-3 py-1 bg-slate-700 text-xs rounded">ยกเลิก</button>
+                <button onclick="saveDevice()" class="px-3 py-1 bg-blue-600 text-xs rounded">บันทึก</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal LINE Settings -->
+    <div id="line-modal" class="fixed inset-0 bg-black/70 z-50 flex items-center justify-center hidden">
+        <div class="bg-slate-800 p-5 rounded-xl border border-slate-700 w-80 space-y-3">
+            <h3 class="text-sm font-bold">ตั้งค่า LINE Notify Token</h3>
+            <input type="text" id="line-token-val" placeholder="วาง LINE Token..." class="w-full bg-slate-900 p-2 text-xs rounded border border-slate-700">
+            <div class="flex justify-end space-x-2 pt-2">
+                <button onclick="closeLineModal()" class="px-3 py-1 bg-slate-700 text-xs rounded">ยกเลิก</button>
+                <button onclick="saveLineToken()" class="px-3 py-1 bg-emerald-600 text-xs rounded">บันทึก</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let devices = [];
+        let activeFaultId = null;
+
+        async function fetchDevices() {
+            try {
+                const res = await fetch('/api/devices');
+                devices = await res.json();
+                renderSLD();
+                renderTable();
+                updateDropdowns();
+            } catch (err) {
+                console.error("Fetch devices error:", err);
+            }
+        }
+
+        function renderSLD() {
+            const svg = document.getElementById('sld-svg');
+            let html = '';
+
+            devices.forEach(dev => {
+                if(dev.upstream) {
+                    const parent = devices.find(p => p.id === dev.upstream);
+                    if(parent) {
+                        const color = (dev.status === 'closed' && parent.status === 'closed') ? '#10b981' : '#ef4444';
+                        html += `<line x1="${parent.x}" y1="${parent.y}" x2="${dev.x}" y2="${dev.y}" stroke="${color}" stroke-width="3" />`;
+                    }
+                }
+            });
+
+            devices.forEach(dev => {
+                let color = dev.status === 'closed' ? '#10b981' : '#ef4444';
+                if(activeFaultId === dev.id) color = '#f59e0b';
+
+                html += `
+                    <g transform="translate(${dev.x}, ${dev.y})" onclick="toggleStatus('${dev.id}')" class="cursor-pointer">
+                        <circle r="22" fill="#1e293b" stroke="${color}" stroke-width="3" />
+                        <text y="-28" text-anchor="middle" fill="#fff" font-size="11" font-weight="bold">${dev.id}</text>
+                        <text y="32" text-anchor="middle" fill="#94a3b8" font-size="9">${dev.type}</text>
+                        <circle r="7" fill="${color}" />
+                    </g>
+                `;
+            });
+
+            svg.innerHTML = html;
+        }
+
+        async function toggleStatus(id) {
+            const dev = devices.find(d => d.id === id);
+            if(dev) {
+                dev.status = dev.status === 'closed' ? 'open' : 'closed';
+                await fetch('/api/devices', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(dev)
+                });
+                fetchDevices();
+            }
+        }
+
+        function renderTable() {
+            const tbody = document.getElementById('device-table-body');
+            tbody.innerHTML = devices.map(d => `
+                <tr>
+                    <td class="p-2 font-bold">${d.id}</td>
+                    <td class="p-2 text-slate-400">${d.type}</td>
+                    <td class="p-2 text-right">
+                        <button onclick="deleteDevice('${d.id}')" class="text-red-400 hover:underline">ลบ</button>
+                    </td>
+                </tr>
+            `).join('');
+        }
+
+        function updateDropdowns() {
+            const selFault = document.getElementById('fault-select');
+            const selUpstream = document.getElementById('dev-upstream');
+            
+            selFault.innerHTML = '<option value="">-- เลือกจุดเกิดเหตุ --</option>' + 
+                devices.map(d => `<option value="${d.id}">${d.id} (${d.type})</option>`).join('');
+
+            selUpstream.innerHTML = '<option value="">-- ไม่มี (ต้นทาง) --</option>' + 
+                devices.map(d => `<option value="${d.id}">${d.id}</option>`).join('');
+        }
+
+        async function checkInGPS() {
+            navigator.geolocation.getCurrentPosition(async pos => {
+                const res = await fetch('/api/gps/nearest', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ lat: pos.coords.latitude, lng: pos.coords.longitude })
+                });
+                const data = await res.json();
+                const div = document.getElementById('gps-result');
+                div.classList.remove('hidden');
+                div.innerHTML = `อุปกรณ์ใกล้สุด: <b>${data.nearest.id}</b> (${data.distanceMeters} เมตร)`;
+            }, () => {
+                alert("ไม่สามารถดึงพิกัด GPS ได้");
+            });
+        }
+
+        async function runIsolation() {
+            const faultId = document.getElementById('fault-select').value;
+            if(!faultId) return alert('กรุณาเลือกจุดเกิดเหตุ');
+            activeFaultId = faultId;
+
+            const res = await fetch('/api/isolation/analyze', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ faultId })
+            });
+            const data = await res.json();
+
+            document.getElementById('steps-list').innerHTML = data.steps.map(s => `
+                <div class="bg-slate-800 p-2 rounded text-xs border border-slate-700">
+                    <span class="text-blue-400 font-bold">#${s.step}</span> ${s.action}
+                </div>
+            `).join('');
+
+            renderSLD();
+        }
+
+        function openAddModal() { document.getElementById('device-modal').classList.remove('hidden'); }
+        function closeModal() { document.getElementById('device-modal').classList.add('hidden'); }
+
+        function openLineModal() { document.getElementById('line-modal').classList.remove('hidden'); }
+        function closeLineModal() { document.getElementById('line-modal').classList.add('hidden'); }
+
+        async function saveLineToken() {
+            const token = document.getElementById('line-token-val').value.trim();
+            await fetch('/api/line/config', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ token })
+            });
+            closeLineModal();
+            alert("บันทึก LINE Token เรียบร้อยแล้ว");
+        }
+
+        async function saveDevice() {
+            const dev = {
+                id: document.getElementById('dev-id').value.trim(),
+                type: document.getElementById('dev-type').value,
+                lat: parseFloat(document.getElementById('dev-lat').value) || 13.75,
+                lng: parseFloat(document.getElementById('dev-lng').value) || 100.50,
+                upstream: document.getElementById('dev-upstream').value,
+                status: 'closed'
+            };
+
+            await fetch('/api/devices', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(dev)
+            });
+
+            closeModal();
+            fetchDevices();
+        }
+
+        async function deleteDevice(id) {
+            if(confirm('ยืนยันลบอุปกรณ์นี้?')) {
+                await fetch(`/api/devices/${id}`, { method: 'DELETE' });
+                fetchDevices();
+            }
+        }
+
+        window.onload = fetchDevices;
+    </script>
+</body>
+</html>
