@@ -1,0 +1,1370 @@
+<!DOCTYPE html>
+<html lang="th" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ระบบจำลองการตัดจ่ายไฟฟ้าและจัดการพิกัดสายขาด (Isolation Assistant)</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        brand: {
+                            50: '#f0f9ff',
+                            100: '#e0f2fe',
+                            500: '#0284c7',
+                            600: '#0369a1',
+                            700: '#075985',
+                            800: '#0c4a6e',
+                            900: '#0f172a',
+                        },
+                        status: {
+                            closed: '#22c55e', // Green for Closed (Energized/Normal)
+                            open: '#ef4444',   // Red for Open (Isolated/Tripped)
+                            fault: '#f59e0b',  // Yellow/Amber for Fault
+                            warning: '#ec4899'
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    <!-- FontAwesome for Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Google Fonts Inter / Sarabun -->
+    <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Sarabun', sans-serif;
+            background-color: #0f172a;
+            color: #f8fafc;
+        }
+        .canvas-bg {
+            background-color: #1e293b;
+            background-image: radial-gradient(#334155 1px, transparent 1px);
+            background-size: 20px 20px;
+        }
+        /* Custom scrollbars */
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #0f172a;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #334155;
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #475569;
+        }
+    </style>
+</head>
+<body class="h-screen flex flex-col overflow-hidden bg-slate-900 text-slate-100">
+
+    <!-- TOP HEADER -->
+    <header class="bg-slate-800 border-b border-slate-700 px-4 py-3 flex items-center justify-between shrink-0 shadow-lg">
+        <div class="flex items-center space-x-3">
+            <div class="bg-gradient-to-tr from-amber-500 to-sky-500 p-2.5 rounded-xl shadow-md">
+                <i class="fa-solid fa-[#f59e0b] fa-bolt text-xl text-slate-900"></i>
+            </div>
+            <div>
+                <h1 class="text-lg font-bold text-white tracking-wide flex items-center gap-2">
+                    ระบบวิเคราะห์และคำนวณการตัดจ่ายไฟฟ้า (Electrical Isolation Assistant)
+                    <span class="text-xs font-normal px-2 py-0.5 rounded bg-sky-900/80 text-sky-300 border border-sky-700">v3.0 LINE Connected</span>
+                </h1>
+                <p class="text-xs text-slate-400">ระบบจำลองการสับ-ปลดสวิตช์ จัดการพิกัดสายขาด พร้อมระบบรายงานผลผ่าน LINE</p>
+            </div>
+        </div>
+
+        <!-- Quick Status & Actions -->
+        <div class="flex items-center space-x-3">
+            <button onclick="openLineSettingsModal()" class="px-3 py-1.5 bg-emerald-700 hover:bg-emerald-600 text-white rounded-lg text-xs font-medium transition flex items-center gap-1.5 shadow">
+                <i class="fa-brands fa-line text-sm"></i> ตั้งค่า LINE Bot / Notify
+            </button>
+
+            <div id="gps-status-badge" class="hidden md:flex items-center space-x-2 bg-slate-900 border border-slate-700 px-3 py-1.5 rounded-lg text-xs">
+                <span class="relative flex h-2.5 w-2.5">
+                  <span id="gps-ping" class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                  <span id="gps-dot" class="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
+                </span>
+                <span id="gps-status-text" class="text-slate-300">GPS: ไม่ได้เชื่อมต่อ</span>
+            </div>
+
+            <button onclick="resetSystemState()" class="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 text-slate-200 rounded-lg text-xs font-medium transition flex items-center gap-1.5 shadow">
+                <i class="fa-solid fa-rotate-left"></i> รีเซ็ตสถานะระบบ
+            </button>
+        </div>
+    </header>
+
+    <!-- MAIN CONTAINER -->
+    <div class="flex-1 flex overflow-hidden">
+
+        <!-- LEFT SIDEBAR: CONTROLS & GPS -->
+        <aside class="w-80 md:w-96 bg-slate-800/90 border-r border-slate-700 flex flex-col shrink-0 z-10 overflow-y-auto">
+            
+            <!-- QUICK SEARCH & GPS / GOOGLE MAPS PANEL -->
+            <div class="p-4 border-b border-slate-700/80 bg-slate-800">
+                <h2 class="text-sm font-semibold text-sky-400 mb-3 flex items-center gap-2">
+                    <i class="fa-solid fa-location-dot"></i> ระบบพิกัด GPS / Google Maps & เช็คอิน
+                </h2>
+                
+                <div class="space-y-3">
+                    <!-- Quick Equipment ID & Type Search -->
+                    <div>
+                        <label class="block text-slate-400 text-xs mb-1">ค้นหาด่วน (รหัสอุปกรณ์ / ประเภท / ชื่อ):</label>
+                        <div class="relative">
+                            <input type="text" id="quick-search-input" onkeyup="handleQuickSearch(this.value)" placeholder="เช่น SW-01, CB, วัดปากน้ำ..." class="w-full bg-slate-900 border border-slate-700 rounded-lg p-2 pl-8 text-xs text-slate-200 focus:outline-none focus:border-sky-500">
+                            <i class="fa-solid fa-magnifying-glass absolute left-2.5 top-2.5 text-slate-500 text-xs"></i>
+                        </div>
+                    </div>
+
+                    <button onclick="getDeviceGPS()" class="w-full py-2.5 bg-sky-600 hover:bg-sky-500 text-white rounded-lg font-medium text-xs flex items-center justify-center gap-2 transition shadow-md active:scale-95">
+                        <i class="fa-solid fa-crosshairs text-sm"></i> ดึงพิกัด GPS ปัจจุบันของฉัน
+                    </button>
+
+                    <!-- Google Maps Link Input or Lat/Lng -->
+                    <div class="space-y-1.5">
+                        <label class="block text-slate-400 text-[11px]">วางลิงก์ Google Maps หรือ พิกัด Lat, Lng:</label>
+                        <div class="flex gap-1.5">
+                            <input type="text" id="google-maps-url-input" placeholder="https://maps.google.com/?q=13.7563,100.5018 หรือ 13.7563, 100.5018" class="flex-1 bg-slate-900 border border-slate-700 rounded p-2 text-slate-200 focus:outline-none focus:border-sky-500 text-xs">
+                            <button onclick="parseGoogleMapsUrlInput()" class="px-2.5 py-1.5 bg-slate-700 hover:bg-slate-600 text-slate-200 rounded text-xs font-medium shrink-0">
+                                แปลงพิกัด
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="grid grid-cols-2 gap-2 text-xs">
+                        <div>
+                            <label class="block text-slate-400 mb-1">Latitude (ละติจูด)</label>
+                            <input type="number" id="input-lat" step="any" placeholder="13.7563" class="w-full bg-slate-900 border border-slate-700 rounded p-2 text-slate-200 focus:outline-none focus:border-sky-500 text-xs">
+                        </div>
+                        <div>
+                            <label class="block text-slate-400 mb-1">Longitude (ลองจิจูด)</label>
+                            <input type="number" id="input-lng" step="any" placeholder="100.5018" class="w-full bg-slate-900 border border-slate-700 rounded p-2 text-slate-200 focus:outline-none focus:border-sky-500 text-xs">
+                        </div>
+                    </div>
+
+                    <button onclick="findNearestEquipmentFromInput()" class="w-full py-2 bg-slate-700 hover:bg-slate-600 text-slate-200 rounded-lg text-xs font-medium transition flex items-center justify-center gap-2">
+                        <i class="fa-solid fa-magnifying-glass-location"></i> ค้นหาอุปกรณ์ใกล้เคียงที่สุด
+                    </button>
+                </div>
+
+                <!-- Nearest Device Result Card -->
+                <div id="nearest-card" class="mt-3 p-3 bg-slate-900/90 border border-slate-700 rounded-lg hidden">
+                    <div class="text-xs text-slate-400 flex justify-between items-center mb-1">
+                        <span>อุปกรณ์ที่ใกล้ที่สุด:</span>
+                        <span id="nearest-distance" class="text-amber-400 font-semibold">0 เมตร</span>
+                    </div>
+                    <div class="flex justify-between items-center">
+                        <div class="font-bold text-sm text-sky-300" id="nearest-id">SW-01</div>
+                        <span id="nearest-type" class="px-2 py-0.5 bg-slate-800 text-slate-300 text-[10px] rounded border border-slate-700">Load Break Switch</span>
+                    </div>
+                    <div id="nearest-name" class="text-xs text-slate-400 mt-1">จุดแยกหน้าวัดปากน้ำ</div>
+                    <div class="mt-2 flex justify-end">
+                        <a id="nearest-gmaps-link" href="#" target="_blank" class="text-[11px] text-sky-400 hover:text-sky-300 underline flex items-center gap-1">
+                            <i class="fa-solid fa-map-location-dot"></i> เปิดใน Google Maps
+                        </a>
+                    </div>
+                </div>
+            </div>
+
+            <!-- FAULT INCIDENT SIMULATION -->
+            <div class="p-4 border-b border-slate-700/80 bg-slate-800/50">
+                <h2 class="text-sm font-semibold text-amber-400 mb-3 flex items-center gap-2">
+                    <i class="fa-solid fa-triangle-exclamation"></i> จำลองแจ้งเหตุสายขาด / จุดชำรุด
+                </h2>
+                
+                <p class="text-xs text-slate-400 mb-3">
+                    เลือกจุดที่เกิดเหตุสายขาดชำรุด เพื่อให้ระบบคำนวณสวิตช์ที่ต้องตัดไฟเพื่อ Isolation
+                </p>
+
+                <div class="space-y-2">
+                    <label class="block text-xs text-slate-300">ระบุช่วงสาย/อุปกรณ์ที่ชำรุด:</label>
+                    <select id="fault-location-select" class="w-full bg-slate-900 border border-slate-700 rounded-lg p-2 text-xs text-slate-200 focus:outline-none focus:border-amber-500">
+                        <option value="">-- คลิกเลือกช่วงสายขาด --</option>
+                    </select>
+
+                    <button onclick="calculateIsolation()" class="w-full py-2.5 bg-gradient-to-r from-amber-600 to-red-600 hover:from-amber-500 hover:to-red-500 text-white font-bold rounded-lg text-xs flex items-center justify-center gap-2 transition shadow-lg mt-2 active:scale-95">
+                        <i class="fa-solid fa-calculator"></i> วิเคราะห์ขั้นตอนตัดจ่าย (Isolation)
+                    </button>
+                </div>
+            </div>
+
+            <!-- TAB SELECTION -->
+            <div class="p-2 bg-slate-900/50 grid grid-cols-3 gap-1 text-xs font-medium border-b border-slate-700">
+                <button id="tab-btn-steps" onclick="switchLeftTab('steps')" class="py-2 text-center rounded-lg bg-sky-600 text-white shadow">
+                    <i class="fa-solid fa-list-check mr-1"></i> ขั้นตอน
+                </button>
+                <button id="tab-btn-master" onclick="switchLeftTab('master')" class="py-2 text-center rounded-lg bg-slate-800 text-slate-400 hover:text-white">
+                    <i class="fa-solid fa-database mr-1"></i> ผังอุปกรณ์
+                </button>
+                <button id="tab-btn-line" onclick="switchLeftTab('line')" class="py-2 text-center rounded-lg bg-slate-800 text-slate-400 hover:text-white">
+                    <i class="fa-brands fa-line mr-1 text-emerald-400"></i> ประวัติ LINE
+                </button>
+            </div>
+
+            <!-- TAB CONTENT 1: SWITCHING STEPS -->
+            <div id="tab-content-steps" class="p-4 flex-1">
+                <div class="flex justify-between items-center mb-2">
+                    <h3 class="text-xs font-bold uppercase text-slate-400 tracking-wider">Switching Order Worksheet</h3>
+                    <span id="step-count-badge" class="text-[10px] px-2 py-0.5 rounded-full bg-slate-700 text-slate-300">0 รายการ</span>
+                </div>
+
+                <div id="switching-steps-list" class="space-y-2">
+                    <!-- Dynamic Steps List -->
+                    <div class="text-center py-8 text-slate-500 text-xs">
+                        <i class="fa-solid fa-clipboard-check text-2xl mb-2 opacity-40"></i>
+                        <p>ยังไม่มีคำสั่งสับ-ปลด</p>
+                        <p class="text-[10px] text-slate-600">เลือกจุดสายขาด แล้วกดวิเคราะห์</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- TAB CONTENT 2: EQUIPMENT MASTER TABLE -->
+            <div id="tab-content-master" class="p-3 flex-1 hidden">
+                <div class="flex justify-between items-center mb-3">
+                    <h3 class="text-xs font-bold text-slate-300">รายชื่ออุปกรณ์ไฟฟ้า</h3>
+                    <button onclick="openAddDeviceModal()" class="px-2 py-1 bg-emerald-600 hover:bg-emerald-500 text-white rounded text-[11px] font-medium flex items-center gap-1">
+                        <i class="fa-solid fa-plus"></i> เพิ่ม
+                    </button>
+                </div>
+
+                <!-- Filter Box inside Master Data -->
+                <div class="mb-2">
+                    <input type="text" id="master-filter-input" onkeyup="filterMasterTable(this.value)" placeholder="ตัวกรองรหัส/ประเภท..." class="w-full bg-slate-900 border border-slate-700 rounded p-1.5 text-[11px] text-slate-200 focus:outline-none focus:border-sky-500">
+                </div>
+
+                <div class="overflow-x-auto">
+                    <table class="w-full text-[11px] text-left text-slate-300 border-collapse">
+                        <thead class="text-[10px] text-slate-400 uppercase bg-slate-900/80">
+                            <tr>
+                                <th class="p-1.5">รหัสอุปกรณ์</th>
+                                <th class="p-1.5">ประเภท</th>
+                                <th class="p-1.5">สถานะ</th>
+                                <th class="p-1.5 text-right">จัดการ</th>
+                            </tr>
+                        </thead>
+                        <tbody id="master-devices-tbody">
+                            <!-- Dynamic Table Rows -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- TAB CONTENT 3: LINE NOTIFICATION LOGS -->
+            <div id="tab-content-line" class="p-3 flex-1 hidden">
+                <div class="flex justify-between items-center mb-3">
+                    <h3 class="text-xs font-bold text-emerald-400 flex items-center gap-1.5">
+                        <i class="fa-brands fa-line"></i> ประวัติการส่งการแจ้งเตือน LINE
+                    </h3>
+                    <button onclick="clearLineLogs()" class="text-[10px] text-slate-400 hover:text-slate-200">
+                        <i class="fa-solid fa-trash"></i> ล้างประวัติ
+                    </button>
+                </div>
+                <div id="line-logs-container" class="space-y-2 text-xs">
+                    <!-- Dynamic LINE Log items injected here -->
+                </div>
+            </div>
+
+        </aside>
+
+        <!-- RIGHT AREA: INTERACTIVE SINGLE LINE DIAGRAM (SLD) -->
+        <main class="flex-1 relative flex flex-col canvas-bg overflow-hidden">
+            
+            <!-- TOOLBAR / LEGEND OVERLAY -->
+            <div class="absolute top-4 left-4 right-4 z-10 flex flex-wrap justify-between items-center gap-3 bg-slate-900/90 backdrop-blur-md p-3 rounded-xl border border-slate-700 shadow-xl">
+                <!-- Legend -->
+                <div class="flex items-center space-x-4 text-xs">
+                    <span class="font-semibold text-slate-300 mr-1"><i class="fa-solid fa-circle-info text-sky-400"></i> สัญลักษณ์:</span>
+                    <div class="flex items-center space-x-1.5">
+                        <span class="w-3 h-3 rounded-sm bg-emerald-500 inline-block"></span>
+                        <span class="text-slate-300">สับ (Closed / ไฟเข้า)</span>
+                    </div>
+                    <div class="flex items-center space-x-1.5">
+                        <span class="w-3 h-3 rounded-sm bg-red-500 inline-block"></span>
+                        <span class="text-slate-300">ปลด (Open / ไม่มีไฟ)</span>
+                    </div>
+                    <div class="flex items-center space-x-1.5">
+                        <span class="w-3 h-3 rounded-full bg-amber-500 animate-pulse inline-block"></span>
+                        <span class="text-slate-300">จุดสายขาด (Fault)</span>
+                    </div>
+                </div>
+
+                <!-- SLD Controls -->
+                <div class="flex items-center space-x-2">
+                    <span class="text-xs text-slate-400">คลิกที่อุปกรณ์บน SLD เพื่อเปิด/ปิด หรือดูพิกัด</span>
+                    <button onclick="centerDiagramView()" class="p-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded border border-slate-600 text-xs" title="Reset View">
+                        <i class="fa-solid fa-expand"></i>
+                    </button>
+                </div>
+            </div>
+
+            <!-- SVG CANVAS CONTAINER FOR SLD -->
+            <div id="canvas-container" class="w-full h-full cursor-grab active:cursor-grabbing flex items-center justify-center p-6">
+                <svg id="sld-svg" class="w-full h-full max-w-5xl max-h-[85vh] transition-all duration-300" viewBox="0 0 1000 650">
+                    <defs>
+                        <!-- Glow effect for fault -->
+                        <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+                            <feGaussianBlur stdDeviation="4" result="blur" />
+                            <feComposite in="SourceGraphic" in2="blur" operator="over" />
+                        </filter>
+                        <!-- Arrow Marker -->
+                        <marker id="arrow" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                            <path d="M 0 0 L 10 5 L 0 10 z" fill="#0284c7" />
+                        </marker>
+                    </defs>
+
+                    <!-- GRID AND CONNECTIONS (DYNAMICALLY GENERATED IN JS) -->
+                    <g id="sld-lines-group"></g>
+                    <g id="sld-devices-group"></g>
+                    <g id="sld-faults-group"></g>
+                </svg>
+            </div>
+
+            <!-- LINE SIMULATOR CONSOLE OVERLAY (BOTTOM RIGHT) -->
+            <div id="line-simulator-box" class="absolute bottom-12 right-4 w-80 bg-slate-900/95 border border-emerald-500/40 rounded-xl shadow-2xl overflow-hidden backdrop-blur-md z-20 flex flex-col transition-all">
+                <div class="bg-emerald-600 px-3 py-2 flex justify-between items-center text-xs font-bold text-white">
+                    <span class="flex items-center gap-1.5"><i class="fa-brands fa-line text-sm"></i> LINE Live Preview Console</span>
+                    <button onclick="toggleLineSimulator()" class="hover:text-slate-200"><i id="sim-toggle-icon" class="fa-solid fa-chevron-down"></i></button>
+                </div>
+                <div id="sim-content-body" class="p-3 max-h-60 overflow-y-auto space-y-2 text-xs">
+                    <div class="p-2.5 bg-slate-800 rounded-lg border border-slate-700 text-slate-300">
+                        <p class="text-[10px] text-emerald-400 font-bold mb-1">🟢 LINE Bot Ready</p>
+                        <p class="text-[11px] text-slate-400">การกระทำที่เกิดขึ้นในระบบจะแสดงเป็นข้อความพรีวิวตัวอย่างที่จะส่งเข้ากลุ่ม LINE ที่นี่...</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- BOTTOM STATUS / LOG BAR -->
+            <div class="bg-slate-900 border-t border-slate-800 px-4 py-2 flex justify-between items-center text-xs text-slate-400 z-10">
+                <div id="status-bar-message" class="flex items-center gap-2 text-sky-400">
+                    <i class="fa-solid fa-circle-check"></i> ระบบพร้อมใช้งาน - สถานะจำลองปกติ
+                </div>
+                <div class="flex items-center space-x-4">
+                    <span>ความถี่ระบบ: <strong class="text-slate-200">50.0 Hz</strong></span>
+                    <span>แรงดันไฟฟ้า: <strong class="text-slate-200">22 kV</strong></span>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- MODAL 1: DEVICE DETAIL & QUICK ACTION -->
+    <div id="device-modal" class="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center hidden">
+        <div class="bg-slate-800 border border-slate-700 rounded-xl w-full max-w-md p-5 shadow-2xl relative">
+            <button onclick="closeModal('device-modal')" class="absolute top-4 right-4 text-slate-400 hover:text-white">
+                <i class="fa-solid fa-xmark text-lg"></i>
+            </button>
+            
+            <div class="flex items-center gap-3 mb-4">
+                <div id="modal-icon-bg" class="p-3 bg-slate-700 rounded-lg text-emerald-400 text-xl">
+                    <i id="modal-icon" class="fa-solid fa-toggle-on"></i>
+                </div>
+                <div>
+                    <h3 id="modal-dev-id" class="text-lg font-bold text-white">SW-01</h3>
+                    <p id="modal-dev-name" class="text-xs text-slate-400">สวิตช์โหลดเบรกเกอร์ - ทางแยกหน้าวัด</p>
+                </div>
+            </div>
+
+            <div class="space-y-3 bg-slate-900/60 p-3 rounded-lg border border-slate-700/50 text-xs mb-4">
+                <div class="flex justify-between">
+                    <span class="text-slate-400">ประเภทอุปกรณ์:</span>
+                    <span id="modal-dev-type" class="font-medium text-slate-200">Load Break Switch (LBS)</span>
+                </div>
+                <div class="flex justify-between items-center">
+                    <span class="text-slate-400">พิกัด GPS:</span>
+                    <div class="flex items-center gap-1.5">
+                        <span id="modal-dev-gps" class="font-mono text-sky-400">13.75630, 100.50180</span>
+                        <a id="modal-gmaps-link" href="#" target="_blank" class="text-emerald-400 hover:text-emerald-300" title="เปิด Google Maps">
+                            <i class="fa-solid fa-arrow-up-right-from-square"></i>
+                        </a>
+                    </div>
+                </div>
+                <div class="flex justify-between">
+                    <span class="text-slate-400">สถานะสวิตช์:</span>
+                    <span id="modal-dev-status" class="font-bold text-emerald-400">สับ (Closed)</span>
+                </div>
+                <div class="flex justify-between">
+                    <span class="text-slate-400">สถานะกระแสไฟ:</span>
+                    <span id="modal-dev-energized" class="font-medium text-emerald-400">มีกระแสไฟ (Energized)</span>
+                </div>
+            </div>
+
+            <div class="grid grid-cols-2 gap-2">
+                <button id="modal-toggle-btn" onclick="toggleDeviceStateFromModal()" class="py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white font-semibold rounded-lg text-xs transition flex items-center justify-center gap-2">
+                    <i class="fa-solid fa-power-off"></i> สลับสถานะ (สับ/ปลด)
+                </button>
+                <button onclick="setGPSFromModal()" class="py-2.5 bg-sky-700 hover:bg-sky-600 text-white font-semibold rounded-lg text-xs transition flex items-center justify-center gap-2">
+                    <i class="fa-solid fa-location-crosshairs"></i> ใช้เป็นพิกัดอ้างอิง
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL 2: ADD / EDIT DEVICE -->
+    <div id="add-device-modal" class="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center hidden">
+        <div class="bg-slate-800 border border-slate-700 rounded-xl w-full max-w-lg p-5 shadow-2xl relative">
+            <button onclick="closeModal('add-device-modal')" class="absolute top-4 right-4 text-slate-400 hover:text-white">
+                <i class="fa-solid fa-xmark text-lg"></i>
+            </button>
+            <h3 class="text-base font-bold text-sky-400 mb-4 flex items-center gap-2">
+                <i class="fa-solid fa-plus-circle"></i> เพิ่มอุปกรณ์ไฟฟ้าใหม่
+            </h3>
+            <form onsubmit="addNewDevice(event)" class="space-y-3 text-xs">
+                <div class="grid grid-cols-2 gap-3">
+                    <div>
+                        <label class="block text-slate-300 mb-1">รหัสอุปกรณ์ (Equipment ID)*</label>
+                        <input type="text" id="new-dev-id" required placeholder="เช่น LBS-03, REC-02" class="w-full bg-slate-900 border border-slate-700 rounded p-2 text-slate-100 focus:border-sky-500 focus:outline-none">
+                    </div>
+                    <div>
+                        <label class="block text-slate-300 mb-1">ประเภทอุปกรณ์*</label>
+                        <select id="new-dev-type" class="w-full bg-slate-900 border border-slate-700 rounded p-2 text-slate-100 focus:border-sky-500 focus:outline-none">
+                            <option value="Load Break Switch">Load Break Switch (LBS)</option>
+                            <option value="Circuit Breaker">Circuit Breaker (CB)</option>
+                            <option value="Recloser">Recloser (REC)</option>
+                            <option value="Disconnect Switch">Disconnect Switch (DS)</option>
+                            <option value="Fused Cutout">Fused Cutout (FCO)</option>
+                        </select>
+                    </div>
+                </div>
+                <div>
+                    <label class="block text-slate-300 mb-1">ชื่อเรียก / ตำแหน่งติดตั้ง*</label>
+                    <input type="text" id="new-dev-name" required placeholder="เช่น จุดแยกเข้าหมู่บ้าน A" class="w-full bg-slate-900 border border-slate-700 rounded p-2 text-slate-100 focus:border-sky-500 focus:outline-none">
+                </div>
+                <div>
+                    <label class="block text-slate-300 mb-1">วางลิงก์ Google Maps (ถ้ามี):</label>
+                    <input type="text" id="new-dev-gmaps-link" onkeyup="extractGmapsUrlToModal(this.value)" placeholder="https://maps.google.com/?q=13.7565,100.5020" class="w-full bg-slate-900 border border-slate-700 rounded p-2 text-slate-100 focus:border-sky-500 focus:outline-none">
+                </div>
+                <div class="grid grid-cols-2 gap-3">
+                    <div>
+                        <label class="block text-slate-300 mb-1">Latitude*</label>
+                        <input type="number" step="any" id="new-dev-lat" required placeholder="13.7565" class="w-full bg-slate-900 border border-slate-700 rounded p-2 text-slate-100 focus:border-sky-500 focus:outline-none">
+                    </div>
+                    <div>
+                        <label class="block text-slate-300 mb-1">Longitude*</label>
+                        <input type="number" step="any" id="new-dev-lng" required placeholder="100.5020" class="w-full bg-slate-900 border border-slate-700 rounded p-2 text-slate-100 focus:border-sky-500 focus:outline-none">
+                    </div>
+                </div>
+                <div>
+                    <label class="block text-slate-300 mb-1">เชื่อมต่อจากอุปกรณ์ต้นน้ำ (Upstream ID)</label>
+                    <select id="new-dev-upstream" class="w-full bg-slate-900 border border-slate-700 rounded p-2 text-slate-100 focus:border-sky-500 focus:outline-none">
+                        <!-- Dynamic Upstream Devices -->
+                    </select>
+                </div>
+                <div class="pt-3 flex justify-end space-x-2">
+                    <button type="button" onclick="closeModal('add-device-modal')" class="px-4 py-2 bg-slate-700 text-slate-300 rounded hover:bg-slate-600">ยกเลิก</button>
+                    <button type="submit" class="px-4 py-2 bg-sky-600 text-white font-medium rounded hover:bg-sky-500">บันทึกอุปกรณ์</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- MODAL 3: LINE NOTIFICATION SETTINGS -->
+    <div id="line-settings-modal" class="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center hidden">
+        <div class="bg-slate-800 border border-slate-700 rounded-xl w-full max-w-lg p-5 shadow-2xl relative">
+            <button onclick="closeModal('line-settings-modal')" class="absolute top-4 right-4 text-slate-400 hover:text-white">
+                <i class="fa-solid fa-xmark text-lg"></i>
+            </button>
+
+            <h3 class="text-base font-bold text-emerald-400 mb-4 flex items-center gap-2">
+                <i class="fa-brands fa-line text-xl"></i> ตั้งค่าระบบส่งการแจ้งเตือน LINE
+            </h3>
+
+            <form id="line-settings-form" onsubmit="saveLineSettings(event)" class="space-y-4 text-xs">
+                <div>
+                    <label class="block text-slate-300 mb-1">ประเภทการเชื่อมต่อ LINE*</label>
+                    <select id="line-config-type" onchange="toggleLineConfigFields()" class="w-full bg-slate-900 border border-slate-700 rounded p-2 text-slate-100 focus:border-emerald-500 focus:outline-none">
+                        <option value="WEBHOOK">Custom Webhook / Make / n8n / Zapier URL</option>
+                        <option value="NOTIFY">LINE Notify (Bearer Token)</option>
+                        <option value="MESSAGING_API">LINE Messaging API (Channel Access Token)</option>
+                    </select>
+                </div>
+
+                <div id="field-token-group">
+                    <label class="block text-slate-300 mb-1">LINE Token / Key*</label>
+                    <input type="password" id="line-token-input" placeholder="ใส่ LINE Notify Token หรือ Channel Access Token" class="w-full bg-slate-900 border border-slate-700 rounded p-2 text-slate-100 focus:border-emerald-500 focus:outline-none">
+                </div>
+
+                <div id="field-webhook-group">
+                    <label class="block text-slate-300 mb-1">Webhook Endpoint URL*</label>
+                    <input type="url" id="line-webhook-input" placeholder="https://hook.us1.make.com/xxxx หรือ https://your-n8n.com/webhook/line" class="w-full bg-slate-900 border border-slate-700 rounded p-2 text-slate-100 focus:border-emerald-500 focus:outline-none">
+                </div>
+
+                <div>
+                    <label class="block text-slate-300 mb-1">ชื่อเจ้าหน้าที่ / ผู้ปฏิบัติงาน (Operator Name)</label>
+                    <input type="text" id="line-operator-name" placeholder="นายวิศวกร ใจดี (กฟภ.)" value="วิศวกรปฏิบัติการหน้างาน" class="w-full bg-slate-900 border border-slate-700 rounded p-2 text-slate-100 focus:border-emerald-500 focus:outline-none">
+                </div>
+
+                <div class="bg-slate-900/60 p-3 rounded-lg border border-slate-700 text-slate-400 space-y-1.5">
+                    <p class="font-bold text-slate-300 text-[11px]">รายการที่จะส่งแจ้งเตือนอัตโนมัติ:</p>
+                    <p>✓ การเช็คอินพิกัด GPS อุปกรณ์ใกล้เคียง</p>
+                    <p>✓ เมื่อระบบคำนวณลำดับขั้นตอนการสับ-ปลดไฟ (Isolation Sequence)</p>
+                    <p>✓ เมื่อเจ้าหน้าที่กดยืนยันปฏิบัติงานสับ/ปลดสวิตช์ทีละขั้นตอน</p>
+                </div>
+
+                <div class="pt-2 flex justify-between items-center">
+                    <button type="button" onclick="testLineNotification()" class="px-3 py-2 bg-emerald-800 hover:bg-emerald-700 text-emerald-200 rounded font-medium flex items-center gap-1.5">
+                        <i class="fa-paper-plane fa-solid text-xs"></i> ทดสอบส่งข้อความ
+                    </button>
+                    <div class="flex space-x-2">
+                        <button type="button" onclick="closeModal('line-settings-modal')" class="px-4 py-2 bg-slate-700 text-slate-300 rounded hover:bg-slate-600">ปิด</button>
+                        <button type="submit" class="px-4 py-2 bg-emerald-600 text-white font-medium rounded hover:bg-emerald-500">บันทึกการตั้งค่า</button>
+                    </div>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- JAVASCRIPT LOGIC & ENGINE -->
+    <script>
+        // ==========================================
+        // GOOGLE MAPS PARSER & SEARCH HELPERS
+        // ==========================================
+
+        function parseGoogleMapsUrlInput() {
+            const val = document.getElementById('google-maps-url-input').value.trim();
+            if (!val) return;
+
+            const coords = parseLatLong(val);
+            if (coords) {
+                document.getElementById('input-lat').value = coords.lat;
+                document.getElementById('input-lng').value = coords.lng;
+                findNearestEquipmentFromInput();
+                showToast(`อ่านพิกัดสำเร็จ: ${coords.lat}, ${coords.lng}`);
+            } else {
+                showToast("รูปแบบลิงก์หรือพิกัดไม่ถูกต้อง โปรดลองอีกครั้ง");
+            }
+        }
+
+        function extractGmapsUrlToModal(val) {
+            const coords = parseLatLong(val);
+            if (coords) {
+                document.getElementById('new-dev-lat').value = coords.lat;
+                document.getElementById('new-dev-lng').value = coords.lng;
+            }
+        }
+
+        function parseLatLong(str) {
+            // Match lat,lng pattern from URL or direct input string
+            const regex = /(-?\d+\.\d+)\s*,\s*(-?\d+\.\d+)/;
+            const match = str.match(regex);
+            if (match) {
+                return { lat: parseFloat(match[1]), lng: parseFloat(match[2]) };
+            }
+            return null;
+        }
+
+        function handleQuickSearch(query) {
+            const q = query.trim().toLowerCase();
+            if (!q) {
+                renderSLD();
+                return;
+            }
+
+            const matched = devices.filter(d => 
+                d.id.toLowerCase().includes(q) || 
+                d.type.toLowerCase().includes(q) || 
+                d.name.toLowerCase().includes(q)
+            );
+
+            if (matched.length > 0) {
+                highlightDeviceSVG(matched[0].id);
+                // Also update nearest card preview
+                const nearestDev = matched[0];
+                const card = document.getElementById('nearest-card');
+                card.classList.remove('hidden');
+                document.getElementById('nearest-id').innerText = nearestDev.id;
+                document.getElementById('nearest-type').innerText = nearestDev.type;
+                document.getElementById('nearest-name').innerText = nearestDev.name;
+                document.getElementById('nearest-distance').innerText = `ตรงกับผลค้นหา`;
+                document.getElementById('nearest-gmaps-link').href = `https://maps.google.com/?q=${nearestDev.lat},${nearestDev.lng}`;
+            }
+        }
+
+        function filterMasterTable(query) {
+            const q = query.trim().toLowerCase();
+            const tbody = document.getElementById('master-devices-tbody');
+            if (!tbody) return;
+            tbody.innerHTML = '';
+            
+            const filtered = devices.filter(d => 
+                d.id.toLowerCase().includes(q) || 
+                d.type.toLowerCase().includes(q) || 
+                d.name.toLowerCase().includes(q)
+            );
+
+            filtered.forEach(dev => {
+                const tr = document.createElement('tr');
+                tr.className = "border-b border-slate-800 hover:bg-slate-800/50";
+                tr.innerHTML = `
+                    <td class="p-1.5 font-bold text-sky-400">${dev.id}</td>
+                    <td class="p-1.5 text-[10px] text-slate-400">${dev.type}</td>
+                    <td class="p-1.5 font-semibold ${dev.status === 'CLOSED' ? 'text-emerald-400' : 'text-red-400'}">${dev.status}</td>
+                    <td class="p-1.5 text-right space-x-1">
+                        <button onclick="openDeviceModal('${dev.id}')" class="px-1.5 py-0.5 bg-slate-700 hover:bg-slate-600 rounded text-[10px] text-slate-200">
+                            <i class="fa-solid fa-eye"></i>
+                        </button>
+                    </td>
+                `;
+                tbody.appendChild(tr);
+            });
+        }
+
+        // Extend openDeviceModal to bind Google Maps link
+        const originalOpenDeviceModal = openDeviceModal;
+        openDeviceModal = function(id) {
+            originalOpenDeviceModal(id);
+            const dev = devices.find(d => d.id === id);
+            if (dev) {
+                const gmapsBtn = document.getElementById('modal-gmaps-link');
+                if (gmapsBtn) {
+                    gmapsBtn.href = `https://maps.google.com/?q=${dev.lat},${dev.lng}`;
+                }
+            }
+        };
+
+        // Override existing findNearestEquipment to attach Google Maps link
+        const prevNearestEq = findNearestEquipment;
+        findNearestEquipment = function(lat, lng) {
+            prevNearestEq(lat, lng);
+            let minDistance = Infinity;
+            let nearestDev = null;
+
+            devices.forEach(dev => {
+                const dist = calculateDistanceMeters(lat, lng, dev.lat, dev.lng);
+                if (dist < minDistance) {
+                    minDistance = dist;
+                    nearestDev = dev;
+                }
+            });
+
+            if (nearestDev) {
+                const gmapsLink = document.getElementById('nearest-gmaps-link');
+                if (gmapsLink) {
+                    gmapsLink.href = `https://maps.google.com/?q=${nearestDev.lat},${nearestDev.lng}`;
+                }
+            }
+        };
+
+        // Override calculateIsolation to notify LINE
+        const originalCalculateIsolation = calculateIsolation;
+        calculateIsolation = function() {
+            originalCalculateIsolation();
+
+            if (recommendedSteps.length > 0 && currentActiveFaultLine) {
+                const lineObj = lineSegments.find(l => l.id === currentActiveFaultLine);
+                const stepSummary = recommendedSteps.map(s => `${s.step}. ${s.action} - ${s.deviceId}`).join('\n');
+
+                dispatchLineNotification(
+                    "⚠️ แจ้งเหตุสายขาด & ขั้นตอน Isolation",
+                    `เกิดเหตุสายขาด: ${lineObj ? lineObj.name : currentActiveFaultLine}\n\nขั้นตอนตัดจ่ายแนะนำ:\n${stepSummary}`,
+                    { faultLine: currentActiveFaultLine }
+                );
+            }
+        };
+
+        // Override executeStep to notify LINE
+        const originalExecuteStep = executeStep;
+        executeStep = function(index) {
+            const step = recommendedSteps[index];
+            originalExecuteStep(index);
+
+            if (step) {
+                dispatchLineNotification(
+                    "⚙️ ยืนยันการสับ-ปลดอุปกรณ์",
+                    `ดำเนินการขั้นตอนที่ ${step.step}: ${step.action}\nอุปกรณ์: ${step.deviceId} (${step.deviceName})\nสถานะ: ดำเนินการเสร็จสิ้น`,
+                    { deviceId: step.deviceId }
+                );
+            }
+        };
+
+        // ==========================================
+        // TAB SWITCHING LOGIC
+        // ==========================================
+        function switchLeftTab(tabName) {
+            ['steps', 'master', 'line'].forEach(t => {
+                const btn = document.getElementById(`tab-btn-${t}`);
+                const content = document.getElementById(`tab-content-${t}`);
+                if (t === tabName) {
+                    btn.className = "py-2 text-center rounded-lg bg-sky-600 text-white shadow";
+                    content.classList.remove('hidden');
+                } else {
+                    btn.className = "py-2 text-center rounded-lg bg-slate-800 text-slate-400 hover:text-white";
+                    content.classList.add('hidden');
+                }
+            });
+            if (tabName === 'master') {
+                filterMasterTable('');
+            }
+        }
+
+        // ==========================================
+        // ADD NEW DEVICE LOGIC
+        // ==========================================
+        function openAddDeviceModal() {
+            // Populate upstream options
+            const upstreamSelect = document.getElementById('new-dev-upstream');
+            upstreamSelect.innerHTML = '<option value="">-- ไม่กำหนด (เป็นจุดจ่ายหลัก) --</option>';
+            devices.forEach(d => {
+                upstreamSelect.innerHTML += `<option value="${d.id}">${d.id} (${d.type} - ${d.name})</option>`;
+            });
+
+            document.getElementById('new-dev-id').value = '';
+            document.getElementById('new-dev-name').value = '';
+            document.getElementById('new-dev-gmaps-link').value = '';
+            document.getElementById('new-dev-lat').value = '';
+            document.getElementById('new-dev-lng').value = '';
+
+            document.getElementById('add-device-modal').classList.remove('hidden');
+        }
+
+        function addNewDevice(event) {
+            event.preventDefault();
+
+            const id = document.getElementById('new-dev-id').value.trim().toUpperCase();
+            const type = document.getElementById('new-dev-type').value;
+            const name = document.getElementById('new-dev-name').value.trim();
+            const lat = parseFloat(document.getElementById('new-dev-lat').value);
+            const lng = parseFloat(document.getElementById('new-dev-lng').value);
+            const upstream = document.getElementById('new-dev-upstream').value;
+
+            if (!id || !name || isNaN(lat) || isNaN(lng)) {
+                showToast("กรุณากรอกข้อมูลรหัส ชื่อ และพิกัดให้ถูกต้อง");
+                return;
+            }
+
+            if (devices.some(d => d.id === id)) {
+                showToast(`รหัสอุปกรณ์ ${id} มีในระบบแล้ว`);
+                return;
+            }
+
+            // Calculate SVG coordinates based on upstream device or default offset
+            let parentX = 500, parentY = 300;
+            if (upstream) {
+                const parentDev = devices.find(d => d.id === upstream);
+                if (parentDev) {
+                    parentX = parentDev.x + 120;
+                    parentY = parentDev.y + (Math.random() > 0.5 ? 40 : -40);
+                }
+            }
+
+            const newDev = {
+                id: id,
+                name: name,
+                type: type,
+                lat: lat,
+                lng: lng,
+                status: 'CLOSED',
+                energized: true,
+                x: parentX > 900 ? 900 : parentX,
+                y: parentY > 550 ? 550 : (parentY < 80 ? 80 : parentY),
+                upstream: upstream || null
+            };
+
+            devices.push(newDev);
+
+            // Add line connection if upstream exists
+            if (upstream) {
+                lineSegments.push({
+                    id: `LINE-${upstream}-${id}`,
+                    from: upstream,
+                    to: id,
+                    name: `ช่วงสาย ${upstream} -> ${id}`
+                });
+            }
+
+            closeModal('add-device-modal');
+            populateFaultSelectOptions();
+            recalculatePowerFlow();
+            filterMasterTable('');
+            showToast(`เพิ่มอุปกรณ์ ${id} เข้าสู่ระบบเรียบร้อยแล้ว`);
+
+            dispatchLineNotification(
+                "➕ เพิ่มอุปกรณ์ไฟฟ้าใหม่",
+                `รหัสอุปกรณ์: ${id}\nประเภท: ${type}\nตำแหน่ง: ${name}\nพิกัด: ${lat}, ${lng}`,
+                { deviceId: id }
+            );
+        }
+
+        function closeModal(modalId) {
+            document.getElementById(modalId).classList.add('hidden');
+        }
+
+        // ==========================================
+        // INITIALIZATION & STATE MANAGEMENT
+        // ==========================================
+        let devices = [
+            { id: 'CB-SUB01', name: 'เมนเบรกเกอร์ สถานีฯ A', type: 'Circuit Breaker', lat: 13.75630, lng: 100.50180, status: 'CLOSED', energized: true, x: 80, y: 300, upstream: null },
+            { id: 'REC-01', name: 'รีโคลสเซอร์ ถนนหลัก', type: 'Recloser', lat: 13.75700, lng: 100.50300, status: 'CLOSED', energized: true, x: 250, y: 300, upstream: 'CB-SUB01' },
+            { id: 'SW-01', name: 'สวิตช์โหลดเบรกเกอร์ ทางแยก 1', type: 'Load Break Switch', lat: 13.75820, lng: 100.50500, status: 'CLOSED', energized: true, x: 450, y: 200, upstream: 'REC-01' },
+            { id: 'SW-02', name: 'สวิตช์โหลดเบรกเกอร์ ทางแยก 2', type: 'Load Break Switch', lat: 13.75600, lng: 100.50600, status: 'CLOSED', energized: true, x: 450, y: 400, upstream: 'REC-01' },
+            { id: 'FCO-01', name: 'ฟิวส์ดรอปเอาท์ ซอย 1', type: 'Fused Cutout', lat: 13.75910, lng: 100.50700, status: 'CLOSED', energized: true, x: 650, y: 150, upstream: 'SW-01' },
+            { id: 'FCO-02', name: 'ฟิวส์ดรอปเอาท์ ซอย 2', type: 'Fused Cutout', lat: 13.75500, lng: 100.50800, status: 'CLOSED', energized: true, x: 650, y: 450, upstream: 'SW-02' },
+            { id: 'SW-03', name: 'สวิตช์เชื่อมโยงระบบ (Tie Switch)', type: 'Load Break Switch', lat: 13.75400, lng: 100.51000, status: 'OPEN', energized: false, x: 850, y: 450, upstream: 'FCO-02' }
+        ];
+
+        let lineSegments = [
+            { id: 'LINE-01', from: 'CB-SUB01', to: 'REC-01', name: 'ช่วงสายเมน สถานีฯ -> REC-01' },
+            { id: 'LINE-02', from: 'REC-01', to: 'SW-01', name: 'ช่วงสายแขนงเหนือ REC-01 -> SW-01' },
+            { id: 'LINE-03', from: 'REC-01', to: 'SW-02', name: 'ช่วงสายแขนงใต้ REC-01 -> SW-02' },
+            { id: 'LINE-04', from: 'SW-01', to: 'FCO-01', name: 'ช่วงสายเข้าซอย 1 SW-01 -> FCO-01' },
+            { id: 'LINE-05', from: 'SW-02', to: 'FCO-02', name: 'ช่วงสายเข้าซอย 2 SW-02 -> FCO-02' },
+            { id: 'LINE-06', from: 'FCO-02', to: 'SW-03', name: 'ช่วงสายปลายสาย Tie SW-03' }
+        ];
+
+        let currentSelectedDeviceId = null;
+        let currentActiveFaultLine = null;
+        let recommendedSteps = [];
+        let lineLogs = [];
+
+        let lineConfig = {
+            type: 'WEBHOOK',
+            token: '',
+            webhookUrl: '',
+            operatorName: 'วิศวกรปฏิบัติการหน้างาน'
+        };
+
+        window.onload = function () {
+            populateFaultSelectOptions();
+            recalculatePowerFlow();
+            renderSLD();
+            switchLeftTab('steps');
+        };
+
+        function showToast(msg) {
+            const bar = document.getElementById('status-bar-message');
+            if (bar) {
+                bar.innerHTML = `<i class="fa-solid fa-circle-info"></i> ${msg}`;
+            }
+        }
+
+        // ==========================================
+        // GPS & HAVERSINE DISTANCE CALCULATIONS
+        // ==========================================
+        function getDeviceGPS() {
+            if (navigator.geolocation) {
+                document.getElementById('gps-status-text').innerText = 'กำลังระบุพิกัด GPS...';
+                navigator.geolocation.getCurrentPosition(position => {
+                    const lat = position.coords.latitude;
+                    const lng = position.coords.longitude;
+
+                    document.getElementById('input-lat').value = lat.toFixed(5);
+                    document.getElementById('input-lng').value = lng.toFixed(5);
+                    document.getElementById('gps-status-text').innerText = `GPS: พร้อมใช้งาน (${lat.toFixed(3)}, ${lng.toFixed(3)})`;
+                    
+                    findNearestEquipment(lat, lng);
+                    showToast(`ดึงพิกัด GPS สำเร็จ: ${lat.toFixed(5)}, ${lng.toFixed(5)}`);
+                }, err => {
+                    document.getElementById('gps-status-text').innerText = 'GPS: ล้มเหลว';
+                    showToast('ไม่สามารถเข้าถึงตำแหน่ง GPS ได้ โปรดระบุพิกัดด้วยตนเอง');
+                });
+            } else {
+                showToast('เบราว์เซอร์ไม่รองรับ GPS');
+            }
+        }
+
+        function findNearestEquipmentFromInput() {
+            const lat = parseFloat(document.getElementById('input-lat').value);
+            const lng = parseFloat(document.getElementById('input-lng').value);
+
+            if (isNaN(lat) || isNaN(lng)) {
+                showToast('โปรดระบุพิกัด ละติจูด และ ลองจิจูด ให้ครบถ้วน');
+                return;
+            }
+            findNearestEquipment(lat, lng);
+        }
+
+        function findNearestEquipment(lat, lng) {
+            let minDist = Infinity;
+            let nearestDev = null;
+
+            devices.forEach(dev => {
+                const dist = calculateDistanceMeters(lat, lng, dev.lat, dev.lng);
+                if (dist < minDist) {
+                    minDist = dist;
+                    nearestDev = dev;
+                }
+            });
+
+            if (nearestDev) {
+                const card = document.getElementById('nearest-card');
+                card.classList.remove('hidden');
+                document.getElementById('nearest-id').innerText = nearestDev.id;
+                document.getElementById('nearest-type').innerText = nearestDev.type;
+                document.getElementById('nearest-name').innerText = nearestDev.name;
+                document.getElementById('nearest-distance').innerText = `${Math.round(minDist)} เมตร`;
+
+                const gmapsLink = document.getElementById('nearest-gmaps-link');
+                if (gmapsLink) {
+                    gmapsLink.href = `https://maps.google.com/?q=${nearestDev.lat},${nearestDev.lng}`;
+                }
+
+                highlightDeviceSVG(nearestDev.id);
+                showToast(`อุปกรณ์ที่ใกล้พิกัดที่สุดคือ ${nearestDev.id} (${Math.round(minDist)} ม.)`);
+
+                dispatchLineNotification(
+                    "📍 รายงานการเช็คอินพิกัด GPS",
+                    `พิกัดเช็คอิน: ${lat}, ${lng}\nอุปกรณ์ที่ใกล้ที่สุด: ${nearestDev.id} (${nearestDev.name})\nระยะห่าง: ${Math.round(minDist)} เมตร`,
+                    { deviceId: nearestDev.id }
+                );
+            }
+        }
+
+        function calculateDistanceMeters(lat1, lon1, lat2, lon2) {
+            const R = 6371e3; // meters
+            const φ1 = lat1 * Math.PI / 180;
+            const φ2 = lat2 * Math.PI / 180;
+            const Δφ = (lat2 - lat1) * Math.PI / 180;
+            const Δλ = (lon2 - lon1) * Math.PI / 180;
+
+            const a = Math.sin(Δφ / 2) * Math.sin(Δφ / 2) +
+                      Math.cos(φ1) * Math.cos(φ2) *
+                      Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
+            const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+
+            return R * c;
+        }
+
+        // ==========================================
+        // ISOLATION ENGINE & FLOW LOGIC
+        // ==========================================
+        function populateFaultSelectOptions() {
+            const sel = document.getElementById('fault-location-select');
+            sel.innerHTML = '<option value="">-- คลิกเลือกช่วงสายขาด --</option>';
+            lineSegments.forEach(seg => {
+                sel.innerHTML += `<option value="${seg.id}">${seg.name}</option>`;
+            });
+        }
+
+        function recalculatePowerFlow() {
+            // BFS/DFS Power Flow Calculation from source (CB-SUB01)
+            devices.forEach(d => d.energized = false);
+
+            let queue = devices.filter(d => d.upstream === null && d.status === 'CLOSED');
+            queue.forEach(d => d.energized = true);
+
+            while (queue.length > 0) {
+                let current = queue.shift();
+                let downstreamDevices = devices.filter(d => d.upstream === current.id);
+
+                downstreamDevices.forEach(child => {
+                    if (current.energized && current.status === 'CLOSED' && child.status === 'CLOSED') {
+                        child.energized = true;
+                        queue.push(child);
+                    }
+                });
+            }
+            renderSLD();
+        }
+
+        function calculateIsolation() {
+            const faultLineId = document.getElementById('fault-location-select').value;
+            if (!faultLineId) {
+                showToast('กรุณาเลือกช่วงสายที่เกิดเหตุสายขาดก่อน');
+                return;
+            }
+
+            currentActiveFaultLine = faultLineId;
+            const lineObj = lineSegments.find(l => l.id === faultLineId);
+            if (!lineObj) return;
+
+            const upstreamDev = devices.find(d => d.id === lineObj.from);
+            const downstreamDev = devices.find(d => d.id === lineObj.to);
+
+            recommendedSteps = [];
+
+            // Step 1: Trip / Open Upstream Isolating Switch
+            if (upstreamDev) {
+                recommendedSteps.push({
+                    step: 1,
+                    action: 'OPEN (ปลดสวิตช์ตัดจ่ายต้นน้ำ)',
+                    deviceId: upstreamDev.id,
+                    deviceName: upstreamDev.name,
+                    targetStatus: 'OPEN',
+                    executed: false
+                });
+            }
+
+            // Step 2: Open Downstream Isolating Switch (Prevent Backfeed)
+            if (downstreamDev) {
+                recommendedSteps.push({
+                    step: 2,
+                    action: 'OPEN (ปลดสวิตช์ตัดจ่ายปลายน้ำป้องกัน Backfeed)',
+                    deviceId: downstreamDev.id,
+                    deviceName: downstreamDev.name,
+                    targetStatus: 'OPEN',
+                    executed: false
+                });
+            }
+
+            // Step 3: Optional Tie Switch Close if available
+            const tieSwitch = devices.find(d => d.id === 'SW-03' && d.status === 'OPEN');
+            if (tieSwitch) {
+                recommendedSteps.push({
+                    step: 3,
+                    action: 'CLOSE (สับ Tie Switch เพื่อจ่ายไฟย้อนฟื้นฟูระบบส่วนที่ไม่ชำรุด)',
+                    deviceId: tieSwitch.id,
+                    deviceName: tieSwitch.name,
+                    targetStatus: 'CLOSED',
+                    executed: false
+                });
+            }
+
+            renderSwitchingSteps();
+            renderSLD();
+            switchLeftTab('steps');
+            showToast(`คำนวณขั้นตอน Isolation สำหรับ ${lineObj.name} เรียบร้อยแล้ว`);
+
+            const stepSummary = recommendedSteps.map(s => `${s.step}. ${s.action} - ${s.deviceId}`).join('\n');
+            dispatchLineNotification(
+                "⚠️ แจ้งเหตุสายขาด & ขั้นตอน Isolation",
+                `เกิดเหตุสายขาด: ${lineObj.name}\n\nขั้นตอนตัดจ่ายแนะนำ:\n${stepSummary}`,
+                { faultLine: currentActiveFaultLine }
+            );
+        }
+
+        function renderSwitchingSteps() {
+            const container = document.getElementById('switching-steps-list');
+            const badge = document.getElementById('step-count-badge');
+            badge.innerText = `${recommendedSteps.length} ขั้นตอน`;
+
+            if (recommendedSteps.length === 0) {
+                container.innerHTML = `
+                    <div class="text-center py-8 text-slate-500 text-xs">
+                        <i class="fa-solid fa-clipboard-check text-2xl mb-2 opacity-40"></i>
+                        <p>ยังไม่มีคำสั่งสับ-ปลด</p>
+                        <p class="text-[10px] text-slate-600">เลือกจุดสายขาด แล้วกดวิเคราะห์</p>
+                    </div>`;
+                return;
+            }
+
+            container.innerHTML = '';
+            recommendedSteps.forEach((s, idx) => {
+                const item = document.createElement('div');
+                item.className = `p-3 rounded-lg border transition ${s.executed ? 'bg-emerald-950/40 border-emerald-700/60' : 'bg-slate-900 border-slate-700'}`;
+                item.innerHTML = `
+                    <div class="flex items-center justify-between mb-1">
+                        <span class="font-bold text-sky-400 text-xs">ขั้นตอนที่ ${s.step}</span>
+                        <span class="px-2 py-0.5 rounded text-[10px] ${s.executed ? 'bg-emerald-800 text-emerald-200' : 'bg-amber-900/80 text-amber-300'}">
+                            ${s.executed ? 'ดำเนินการแล้ว' : 'รอดำเนินการ'}
+                        </span>
+                    </div>
+                    <p class="text-xs font-semibold text-slate-200 mb-0.5">${s.action}</p>
+                    <p class="text-[11px] text-slate-400">อุปกรณ์: <span class="font-mono text-amber-300">${s.deviceId}</span> (${s.deviceName})</p>
+                    ${!s.executed ? `
+                        <button onclick="executeStep(${idx})" class="mt-2 w-full py-1.5 bg-sky-600 hover:bg-sky-500 text-white rounded text-xs font-medium transition flex items-center justify-center gap-1.5">
+                            <i class="fa-solid fa-check"></i> ยืนยันสับ-ปลดสวิตช์
+                        </button>
+                    ` : ''}
+                `;
+                container.appendChild(item);
+            });
+        }
+
+        function executeStep(index) {
+            const step = recommendedSteps[index];
+            if (!step || step.executed) return;
+
+            const dev = devices.find(d => d.id === step.deviceId);
+            if (dev) {
+                dev.status = step.targetStatus;
+                step.executed = true;
+                recalculatePowerFlow();
+                renderSwitchingSteps();
+                showToast(`ดำเนินการขั้นตอนที่ ${step.step} (${step.deviceId}) สำเร็จ`);
+
+                dispatchLineNotification(
+                    "⚙️ ยืนยันการสับ-ปลดอุปกรณ์",
+                    `ดำเนินการขั้นตอนที่ ${step.step}: ${step.action}\nอุปกรณ์: ${step.deviceId} (${step.deviceName})\nสถานะปัจจุบัน: ${dev.status}`,
+                    { deviceId: step.deviceId }
+                );
+            }
+        }
+
+        function resetSystemState() {
+            devices.forEach(d => {
+                if (d.id === 'SW-03') d.status = 'OPEN';
+                else d.status = 'CLOSED';
+            });
+            currentActiveFaultLine = null;
+            recommendedSteps = [];
+            document.getElementById('fault-location-select').value = '';
+            document.getElementById('nearest-card').classList.add('hidden');
+            recalculatePowerFlow();
+            renderSwitchingSteps();
+            showToast('รีเซ็ตสถานะระบบกลับสู่สภาวะปกติเรียบร้อย');
+        }
+
+        // ==========================================
+        // SLD SVG RENDERING ENGINE
+        // ==========================================
+        function renderSLD() {
+            const linesGroup = document.getElementById('sld-lines-group');
+            const devicesGroup = document.getElementById('sld-devices-group');
+            const faultsGroup = document.getElementById('sld-faults-group');
+
+            if (!linesGroup || !devicesGroup || !faultsGroup) return;
+
+            linesGroup.innerHTML = '';
+            devicesGroup.innerHTML = '';
+            faultsGroup.innerHTML = '';
+
+            // Draw Lines
+            lineSegments.forEach(seg => {
+                const d1 = devices.find(d => d.id === seg.from);
+                const d2 = devices.find(d => d.id === seg.to);
+                if (!d1 || !d2) return;
+
+                const isFault = currentActiveFaultLine === seg.id;
+                const isEnergized = d1.energized && d1.status === 'CLOSED' && !isFault;
+
+                const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+                line.setAttribute('x1', d1.x);
+                line.setAttribute('y1', d1.y);
+                line.setAttribute('x2', d2.x);
+                line.setAttribute('y2', d2.y);
+                line.setAttribute('stroke', isFault ? '#f59e0b' : (isEnergized ? '#22c55e' : '#64748b'));
+                line.setAttribute('stroke-width', isFault ? '5' : '3');
+                if (isFault) line.setAttribute('stroke-dasharray', '8 4');
+
+                linesGroup.appendChild(line);
+
+                if (isFault) {
+                    const midX = (d1.x + d2.x) / 2;
+                    const midY = (d1.y + d2.y) / 2;
+
+                    const faultMarker = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+                    faultMarker.innerHTML = `
+                        <circle cx="${midX}" cy="${midY}" r="16" fill="#f59e0b" opacity="0.3" class="animate-ping" />
+                        <circle cx="${midX}" cy="${midY}" r="10" fill="#ef4444" filter="url(#glow)" />
+                        <text x="${midX}" y="${midY + 4}" text-anchor="middle" fill="#ffffff" font-size="10" font-weight="bold">⚡</text>
+                    `;
+                    faultsGroup.appendChild(faultMarker);
+                }
+            });
+
+            // Draw Devices
+            devices.forEach(dev => {
+                const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+                g.setAttribute('class', 'cursor-pointer hover:opacity-80 transition');
+                g.setAttribute('onclick', `openDeviceModal('${dev.id}')`);
+
+                const color = dev.status === 'CLOSED' ? '#22c55e' : '#ef4444';
+
+                g.innerHTML = `
+                    <rect x="${dev.x - 22}" y="${dev.y - 22}" width="44" height="44" rx="8" fill="#1e293b" stroke="${color}" stroke-width="2.5" />
+                    <circle cx="${dev.x}" cy="${dev.y}" r="6" fill="${dev.energized ? '#22c55e' : '#94a3b8'}" />
+                    <text x="${dev.x}" y="${dev.y - 28}" text-anchor="middle" fill="#38bdf8" font-size="11" font-weight="bold">${dev.id}</text>
+                    <text x="${dev.x}" y="${dev.y + 36}" text-anchor="middle" fill="#94a3b8" font-size="9">${dev.type}</text>
+                `;
+
+                devicesGroup.appendChild(g);
+            });
+        }
+
+        function highlightDeviceSVG(deviceId) {
+            renderSLD();
+            const dev = devices.find(d => d.id === deviceId);
+            if (dev) {
+                const faultsGroup = document.getElementById('sld-faults-group');
+                const highlight = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+                highlight.setAttribute('cx', dev.x);
+                highlight.setAttribute('cy', dev.y);
+                highlight.setAttribute('r', '32');
+                highlight.setAttribute('fill', 'none');
+                highlight.setAttribute('stroke', '#38bdf8');
+                highlight.setAttribute('stroke-width', '3');
+                highlight.setAttribute('class', 'animate-pulse');
+                faultsGroup.appendChild(highlight);
+            }
+        }
+
+        function centerDiagramView() {
+            renderSLD();
+            showToast('ปรับมุมมองแผนผัง Single Line Diagram เรียบร้อยแล้ว');
+        }
+
+        // ==========================================
+        // DEVICE MODAL HANDLERS
+        // ==========================================
+        function openDeviceModal(id) {
+            currentSelectedDeviceId = id;
+            const dev = devices.find(d => d.id === id);
+            if (!dev) return;
+
+            document.getElementById('modal-dev-id').innerText = dev.id;
+            document.getElementById('modal-dev-name').innerText = dev.name;
+            document.getElementById('modal-dev-type').innerText = dev.type;
+            document.getElementById('modal-dev-gps').innerText = `${dev.lat.toFixed(5)}, ${dev.lng.toFixed(5)}`;
+            document.getElementById('modal-dev-status').innerText = dev.status === 'CLOSED' ? 'สับ (Closed)' : 'ปลด (Open)';
+            document.getElementById('modal-dev-status').className = `font-bold ${dev.status === 'CLOSED' ? 'text-emerald-400' : 'text-red-400'}`;
+            document.getElementById('modal-dev-energized').innerText = dev.energized ? 'มีกระแสไฟ (Energized)' : 'ไม่มีกระแสไฟ (De-energized)';
+            document.getElementById('modal-dev-energized').className = `font-medium ${dev.energized ? 'text-emerald-400' : 'text-slate-400'}`;
+
+            const gmapsBtn = document.getElementById('modal-gmaps-link');
+            if (gmapsBtn) {
+                gmapsBtn.href = `https://maps.google.com/?q=${dev.lat},${dev.lng}`;
+            }
+
+            document.getElementById('device-modal').classList.remove('hidden');
+        }
+
+        function toggleDeviceStateFromModal() {
+            if (!currentSelectedDeviceId) return;
+            const dev = devices.find(d => d.id === currentSelectedDeviceId);
+            if (dev) {
+                dev.status = dev.status === 'CLOSED' ? 'OPEN' : 'CLOSED';
+                recalculatePowerFlow();
+                openDeviceModal(dev.id);
+                showToast(`เปลี่ยนสถานะ ${dev.id} เป็น ${dev.status}`);
+
+                dispatchLineNotification(
+                    "🔄 เปลี่ยนสถานะสวิตช์",
+                    `อุปกรณ์: ${dev.id} (${dev.name})\nสถานะใหม่: ${dev.status}`,
+                    { deviceId: dev.id }
+                );
+            }
+        }
+
+        function setGPSFromModal() {
+            if (!currentSelectedDeviceId) return;
+            const dev = devices.find(d => d.id === currentSelectedDeviceId);
+            if (dev) {
+                document.getElementById('input-lat').value = dev.lat;
+                document.getElementById('input-lng').value = dev.lng;
+                closeModal('device-modal');
+                findNearestEquipment(dev.lat, dev.lng);
+            }
+        }
+
+        // ==========================================
+        // LINE NOTIFICATION & WEBHOOK INTEGRATION
+        // ==========================================
+        function openLineSettingsModal() {
+            document.getElementById('line-config-type').value = lineConfig.type;
+            document.getElementById('line-token-input').value = lineConfig.token;
+            document.getElementById('line-webhook-input').value = lineConfig.webhookUrl;
+            document.getElementById('line-operator-name').value = lineConfig.operatorName;
+            toggleLineConfigFields();
+            document.getElementById('line-settings-modal').classList.remove('hidden');
+        }
+
+        function toggleLineConfigFields() {
+            const type = document.getElementById('line-config-type').value;
+            const tokenGrp = document.getElementById('field-token-group');
+            const webhookGrp = document.getElementById('field-webhook-group');
+
+            if (type === 'WEBHOOK') {
+                tokenGrp.classList.add('hidden');
+                webhookGrp.classList.remove('hidden');
+            } else {
+                tokenGrp.classList.remove('hidden');
+                webhookGrp.classList.add('hidden');
+            }
+        }
+
+        function saveLineSettings(event) {
+            event.preventDefault();
+            lineConfig.type = document.getElementById('line-config-type').value;
+            lineConfig.token = document.getElementById('line-token-input').value.trim();
+            lineConfig.webhookUrl = document.getElementById('line-webhook-input').value.trim();
+            lineConfig.operatorName = document.getElementById('line-operator-name').value.trim() || 'ผู้ปฏิบัติงาน';
+
+            closeModal('line-settings-modal');
+            showToast('บันทึกการตั้งค่า LINE เรียบร้อยแล้ว');
+        }
+
+        function testLineNotification() {
+            dispatchLineNotification(
+                "🧪 ทดสอบการเชื่อมต่อระบบ LINE",
+                `ทดสอบส่งข้อความแจ้งเตือนจากระบบ Isolation Assistant\nผู้ปฏิบัติงาน: ${lineConfig.operatorName}\nเวลา: ${new Date().toLocaleTimeString('th-TH')}`,
+                { test: true }
+            );
+        }
+
+        function dispatchLineNotification(title, detail, extraData = {}) {
+            const timestamp = new Date().toLocaleTimeString('th-TH');
+            const fullMessage = `[Electrical Isolation System]\n${title}\n------------------------\n${detail}\n------------------------\nผู้บันทึก: ${lineConfig.operatorName}\nเวลา: ${timestamp}`;
+
+            // Add to internal logs
+            lineLogs.unshift({ timestamp, title, detail });
+            renderLineLogs();
+
+            // Push to Live Console Preview
+            const consoleBody = document.getElementById('sim-content-body');
+            if (consoleBody) {
+                const item = document.createElement('div');
+                item.className = 'p-2.5 bg-slate-800 rounded-lg border border-emerald-500/30 text-slate-200 text-xs animate-fade-in';
+                item.innerHTML = `
+                    <p class="text-[10px] text-emerald-400 font-bold flex justify-between">
+                        <span>💬 ${title}</span>
+                        <span class="text-slate-500">${timestamp}</span>
+                    </p>
+                    <p class="text-[11px] text-slate-300 mt-1 whitespace-pre-line">${detail}</p>
+                `;
+                consoleBody.prepend(item);
+            }
+
+            // Real External HTTP POST Dispatch
+            if (lineConfig.type === 'WEBHOOK' && lineConfig.webhookUrl) {
+                fetch(lineConfig.webhookUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        title: title,
+                        message: fullMessage,
+                        detail: detail,
+                        operator: lineConfig.operatorName,
+                        timestamp: timestamp,
+                        data: extraData
+                    })
+                }).catch(err => console.log('Webhook Send Error:', err));
+            }
+        }
+
+        function renderLineLogs() {
+            const container = document.getElementById('line-logs-container');
+            if (!container) return;
+            if (lineLogs.length === 0) {
+                container.innerHTML = `<p class="text-slate-500 text-center text-xs py-4">ยังไม่มีประวัติการแจ้งเตือน</p>`;
+                return;
+            }
+            container.innerHTML = '';
+            lineLogs.forEach(log => {
+                const item = document.createElement('div');
+                item.className = 'p-2 bg-slate-900 border border-slate-700 rounded text-xs';
+                item.innerHTML = `
+                    <div class="flex justify-between text-emerald-400 font-bold mb-1">
+                        <span>${log.title}</span>
+                        <span class="text-slate-500 text-[10px]">${log.timestamp}</span>
+                    </div>
+                    <p class="text-slate-300 whitespace-pre-line text-[11px]">${log.detail}</p>
+                `;
+                container.appendChild(item);
+            });
+        }
+
+        function clearLineLogs() {
+            lineLogs = [];
+            renderLineLogs();
+            showToast('ล้างประวัติ LINE เรียบร้อยแล้ว');
+        }
+
+        function toggleLineSimulator() {
+            const body = document.getElementById('sim-content-body');
+            const icon = document.getElementById('sim-toggle-icon');
+            if (body.classList.contains('hidden')) {
+                body.classList.remove('hidden');
+                icon.className = 'fa-solid fa-chevron-down';
+            } else {
+                body.classList.add('hidden');
+                icon.className = 'fa-solid fa-chevron-up';
+            }
+        }
+    </script>
+</body>
+</html>
